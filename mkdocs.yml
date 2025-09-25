@@ -1,0 +1,16 @@
+site_name: Projeto Integrador
+site_description: Documentação inicial do Projeto Integrador
+site_author: Juliana
+theme:
+  name: material   # tema bonito e moderno
+  palette:
+    primary: blue
+    accent: light blue
+
+nav:
+  - Estrutura: Estrutura/estrutura.md
+  - Software: Software/software.md
+  - Eletrônica: Eletronica/eletronica.md
+
+# Caminho dos arquivos de documentação
+docs_dir: docs
