@@ -6,6 +6,6 @@ Neste repositório, use os seguintes tipos de commits para manter a documentaç�
 - **docs**: mudanças na documentação  
 - **chore**: manutenção ou ajustes sem impacto no conteúdo principal  
 
-# Nunca faça commits direto na branch main 
+Não faça commits direto na branch main, abra uma brach para adicionar as alterações
 
 
