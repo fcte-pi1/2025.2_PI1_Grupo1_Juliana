@@ -3,7 +3,7 @@ from app.model import carrinho_model
 
 def get_item(db: Session, id_carrinho: int):
     """Busca um item pelo ID."""
-    return db.query(carrinho_model.CarrinhoORM).filter(carrinho_model.CarrinhoORM.id == id_carrinho).first()
+    return db.query(carrinho_model.CarrinhoORM).filter(carrinho_model.CarrinhoORM.id_carrinho == id_carrinho).first()
 
 def create_item(db: Session, carrinho_data: carrinho_model.CarrinhoCreate):
     """Cria um novo item no BD."""

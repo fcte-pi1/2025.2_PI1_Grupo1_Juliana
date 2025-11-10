@@ -22,9 +22,11 @@ class CommandCreate(BaseModel):
     value: float
     unit: str
 
+from pydantic import Field
+
 class TrajectoryCreate(BaseModel):
     name: str
-    commands: List[CommandCreate]
+    commands: List[CommandCreate] = Field(..., min_items=1)
     store_in_memory: bool
 
 class TrajectoryRead(BaseModel):

@@ -10,3 +10,4 @@ env/
 # Credenciais e Logs
 .env
 *.log
+node_modules

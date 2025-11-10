@@ -18,7 +18,7 @@ def create_item_endpoint(carrinho: carrinho_model.CarrinhoCreate, db: Session = 
 @router.get("/{carrinho_id}", response_model=carrinho_model.Carrinho)
 def read_item_endpoint(carrinho_id: int, db: Session = Depends(get_db)):
     """Rota para ler um Item pelo ID."""
-    db_item = carrinho_service.get_item(db=db, carrinho_id=carrinho_id)
+    db_item = carrinho_service.get_item(db=db, id_carrinho=carrinho_id)
     
     if db_item is None:
         raise HTTPException(status_code=404, detail="Carrinho não encontrado!")
