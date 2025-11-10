@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.model.execution import Execution
 from app.service import execution_service
+
 
 router = APIRouter(
     prefix="/execucoes",
@@ -29,3 +30,47 @@ def export_execution_logs_csv(id_execucao: int, db: Session = Depends(get_db)):
         "Content-Disposition": f"attachment; filename={filename}",
     }
     return Response(content=csv_content, media_type="text/csv", headers=headers)
+
+
+@router.post("/simulate", status_code=201)
+def simulate_execution(db: Session = Depends(get_db)):
+    """Endpoint para rodar uma execução simulada e retornar a execução e quantidade de logs."""
+    execution = execution_service.simulate_run(db, steps=8)
+    logs = execution_service.get_execution_logs(db, execution.id_execucao)
+    return {
+        "id_execucao": execution.id_execucao,
+        "status": execution.status,
+        "data_inicio": execution.data_inicio,
+        "data_fim": execution.data_fim,
+        "total_logs": len(logs)
+    }
+
+
+@router.get("/")
+def list_executions(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    executions = execution_service.list_executions(db, status=status, limit=limit, offset=offset)
+    return [execution_service.execution_to_dict(e) for e in executions]
+
+
+@router.get("/{id_execucao}")
+def get_execution(id_execucao: int, db: Session = Depends(get_db)):
+    summary = execution_service.get_execution_summary(db, id_execucao)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Execução não encontrada")
+    return summary
+
+
+@router.get("/{id_execucao}/logs")
+def get_execution_logs_endpoint(
+    id_execucao: int,
+    limit: int = Query(default=100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    # Retorna logs mais recentes primeiro
+    logs = execution_service.get_recent_logs(db, id_execucao=id_execucao, limit=limit)
+    return [execution_service.log_to_dict(l) for l in logs]

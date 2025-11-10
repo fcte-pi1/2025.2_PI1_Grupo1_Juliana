@@ -23,7 +23,9 @@ class Execution(Base):
     data_inicio = Column(DateTime(timezone=True))
     data_fim = Column(DateTime(timezone=True))
     status = Column(String(50))
-    tempo_estimado = Column(PGInterval)
+    # Substituído por String para compatibilidade com SQLite em dev.
+    # Em Postgres, pode-se usar INTERVAL. Para portabilidade, manteremos string aqui.
+    tempo_estimado = Column(String(50))
 
     logs = relationship(
         "ExecutionLog",
