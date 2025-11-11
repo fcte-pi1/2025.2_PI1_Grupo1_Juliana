@@ -4,6 +4,12 @@ from app.model.models import Circuito
 from app.model.carrinho_model import CarrinhoORM
 from typing import Iterable, Optional, List
 from datetime import datetime
+from app.model.execution_payloads import (
+    ExecutionStart,
+    ExecutionLogCreate,
+    ExecutionStatusUpdate,
+)
+from io import BytesIO
 import csv
 import io
 
@@ -134,12 +140,19 @@ def get_or_create_circuito_simulado(db: Session, nome: str = "Circuito Simulado"
     return circuito
 
 
-def create_execution(db: Session, id_carrinho: int, id_circuito: int, status: str = "running") -> Execution:
+def create_execution(
+    db: Session,
+    id_carrinho: int,
+    id_circuito: int,
+    status: str = "running",
+    tempo_estimado: Optional[str] = None,
+) -> Execution:
     execution = Execution(
         id_carrinho=id_carrinho,
         id_circuito=id_circuito,
         data_inicio=datetime.now().astimezone(),
         status=status,
+        tempo_estimado=tempo_estimado or "",
     )
     db.add(execution)
     db.commit()
@@ -207,3 +220,106 @@ def simulate_run(db: Session, steps: int = 5) -> Execution:
 
     finish_execution(db, execution.id_execucao, status="completed")
     return execution
+
+
+# ----------------- Execução "real" (controlada pelo carrinho) -----------------
+def start_real_execution(db: Session, payload: ExecutionStart) -> dict:
+    execution = create_execution(
+        db,
+        id_carrinho=payload.id_carrinho,
+        id_circuito=payload.id_circuito,
+        status="running",
+        tempo_estimado=payload.tempo_estimado,
+    )
+    return {
+        "id_execucao": execution.id_execucao,
+        "status": execution.status,
+        "data_inicio": execution.data_inicio,
+    }
+
+
+def add_real_log(db: Session, id_execucao: int, payload: ExecutionLogCreate) -> dict:
+    log = add_execution_log(
+        db,
+        id_execucao=id_execucao,
+        posicao_atual=payload.posicao_atual,
+        velocidade=payload.velocidade,
+        posicao_x=payload.posicao_x,
+        posicao_y=payload.posicao_y,
+        orientacao=payload.orientacao,
+        observacao=payload.observacao,
+    )
+    return {"id_log": log.id_log, "timestamp": log.timestamp}
+
+
+def update_execution_status(db: Session, id_execucao: int, payload: ExecutionStatusUpdate) -> Optional[dict]:
+    execution = db.query(Execution).filter(Execution.id_execucao == id_execucao).first()
+    if not execution:
+        return None
+    execution.status = payload.status
+    if payload.status in ("completed", "error", "stopped"):
+        execution.data_fim = datetime.now().astimezone()
+    db.commit()
+    db.refresh(execution)
+    return {
+        "id_execucao": execution.id_execucao,
+        "status": execution.status,
+        "data_fim": execution.data_fim,
+    }
+
+
+def stop_execution(db: Session, id_execucao: int) -> Optional[dict]:
+    return update_execution_status(db, id_execucao, ExecutionStatusUpdate(status="stopped"))
+
+
+def generate_route_plot(db: Session, id_execucao: int) -> Optional[bytes]:
+    """
+    Gera um gráfico PNG do percurso (posicao_x vs posicao_y) para uma execução.
+    Retorna bytes do PNG ou None se não houver dados suficientes.
+    """
+    # Import lazy para evitar dependência em caminhos que não usam o gráfico
+    try:
+        import matplotlib
+        matplotlib.use("Agg")  # backend headless
+        import matplotlib.pyplot as plt
+    except Exception:  # pragma: no cover - fallback se matplotlib não estiver instalado
+        return None
+
+    logs = (
+        db.query(ExecutionLog)
+        .filter(ExecutionLog.id_execucao == id_execucao)
+        .order_by(ExecutionLog.timestamp.asc())
+        .all()
+    )
+    xs: List[float] = []
+    ys: List[float] = []
+    for l in logs:
+        if l.posicao_x is not None and l.posicao_y is not None:
+            # Numeric pode vir como Decimal; converter para float
+            try:
+                xs.append(float(l.posicao_x))
+                ys.append(float(l.posicao_y))
+            except Exception:
+                continue
+
+    if len(xs) < 2:
+        return None
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.plot(xs, ys, "-o", linewidth=2, markersize=3, color="#1f77b4")
+    ax.set_title(f"Percurso Execução {id_execucao}")
+    ax.set_xlabel("Posição X")
+    ax.set_ylabel("Posição Y")
+    ax.grid(True, linestyle=":", alpha=0.5)
+    # marca início e fim
+    ax.scatter([xs[0]], [ys[0]], c="green", s=60, label="Início")
+    ax.scatter([xs[-1]], [ys[-1]], c="red", s=60, label="Fim")
+    ax.legend(loc="best")
+    ax.axis("equal")
+
+    buf = BytesIO()
+    fig.tight_layout()
+    plt.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()

@@ -1,8 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.model.execution import Execution
+from app.model.execution_payloads import (
+    ExecutionStart,
+    ExecutionLogCreate,
+    ExecutionStatusUpdate,
+)
+from app.model.models import Circuito
+from app.model.carrinho_model import CarrinhoORM
 from app.service import execution_service
 
 
@@ -46,6 +53,42 @@ def simulate_execution(db: Session = Depends(get_db)):
     }
 
 
+# ----------------- Endpoints de execução real -----------------
+@router.post("/", status_code=201)
+def start_execution(payload: ExecutionStart, db: Session = Depends(get_db)):
+    # valida se circuito e carrinho existem
+    if not db.query(Circuito).filter_by(id_circuito=payload.id_circuito).first():
+        raise HTTPException(status_code=404, detail="Circuito não encontrado")
+    if not db.query(CarrinhoORM).filter_by(id_carrinho=payload.id_carrinho).first():
+        raise HTTPException(status_code=404, detail="Carrinho não encontrado")
+    result = execution_service.start_real_execution(db, payload)
+    return result
+
+
+@router.post("/{id_execucao}/logs", status_code=201)
+def ingest_log(id_execucao: int, payload: ExecutionLogCreate, db: Session = Depends(get_db)):
+    if not db.query(Execution).filter_by(id_execucao=id_execucao).first():
+        raise HTTPException(status_code=404, detail="Execução não encontrada")
+    result = execution_service.add_real_log(db, id_execucao, payload)
+    return result
+
+
+@router.patch("/{id_execucao}/status")
+def patch_status(id_execucao: int, payload: ExecutionStatusUpdate, db: Session = Depends(get_db)):
+    result = execution_service.update_execution_status(db, id_execucao, payload)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Execução não encontrada")
+    return result
+
+
+@router.post("/{id_execucao}/stop")
+def stop_execution(id_execucao: int, db: Session = Depends(get_db)):
+    result = execution_service.stop_execution(db, id_execucao)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Execução não encontrada")
+    return result
+
+
 @router.get("/")
 def list_executions(
     status: str | None = Query(default=None),
@@ -74,3 +117,11 @@ def get_execution_logs_endpoint(
     # Retorna logs mais recentes primeiro
     logs = execution_service.get_recent_logs(db, id_execucao=id_execucao, limit=limit)
     return [execution_service.log_to_dict(l) for l in logs]
+
+
+@router.get("/{id_execucao}/graph")
+def get_execution_graph(id_execucao: int, db: Session = Depends(get_db)):
+    png_bytes = execution_service.generate_route_plot(db, id_execucao)
+    if png_bytes is None:
+        raise HTTPException(status_code=400, detail="Dados insuficientes para gerar gráfico (necessário posicao_x e posicao_y)")
+    return StreamingResponse(iter([png_bytes]), media_type="image/png")
