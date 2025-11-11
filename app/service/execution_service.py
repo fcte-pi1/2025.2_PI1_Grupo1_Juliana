@@ -55,10 +55,18 @@ def logs_to_csv(logs: Iterable[ExecutionLog]) -> str:
 
 
 # ----------------- Listagem e detalhes -----------------
-def list_executions(db: Session, status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Execution]:
+def list_executions(
+    db: Session,
+    status: Optional[str] = None,
+    id_circuito: Optional[int] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Execution]:
     q = db.query(Execution).order_by(Execution.id_execucao.desc())
     if status:
         q = q.filter(Execution.status == status)
+    if id_circuito is not None:
+        q = q.filter(Execution.id_circuito == id_circuito)
     return q.offset(offset).limit(min(limit, 200)).all()
 
 
@@ -323,3 +331,13 @@ def generate_route_plot(db: Session, id_execucao: int) -> Optional[bytes]:
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
+
+
+# ----------------- Utilidades -----------------
+def has_running_execution_for_cart(db: Session, id_carrinho: int) -> bool:
+    return (
+        db.query(Execution)
+        .filter(Execution.id_carrinho == id_carrinho, Execution.status == "running")
+        .first()
+        is not None
+    )

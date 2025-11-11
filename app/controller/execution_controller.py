@@ -61,6 +61,9 @@ def start_execution(payload: ExecutionStart, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Circuito não encontrado")
     if not db.query(CarrinhoORM).filter_by(id_carrinho=payload.id_carrinho).first():
         raise HTTPException(status_code=404, detail="Carrinho não encontrado")
+    # evita duas execuções simultâneas para o mesmo carrinho
+    if execution_service.has_running_execution_for_cart(db, payload.id_carrinho):
+        raise HTTPException(status_code=409, detail="Carrinho já possui uma execução em andamento")
     result = execution_service.start_real_execution(db, payload)
     return result
 
@@ -92,11 +95,18 @@ def stop_execution(id_execucao: int, db: Session = Depends(get_db)):
 @router.get("/")
 def list_executions(
     status: str | None = Query(default=None),
+    id_circuito: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    executions = execution_service.list_executions(db, status=status, limit=limit, offset=offset)
+    executions = execution_service.list_executions(
+        db,
+        status=status,
+        id_circuito=id_circuito,
+        limit=limit,
+        offset=offset,
+    )
     return [execution_service.execution_to_dict(e) for e in executions]
 
 
