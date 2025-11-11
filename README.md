@@ -1,12 +1,16 @@
 # 2025.2_PI1_Grupo1_Juliana
-#  Padrão de Commits
+# Padrão de Commits
 
-Neste repositório, use os seguintes tipos de commits para manter a documentação organizada:
+Use os seguintes tipos de commits:
 
-- **docs**: mudanças na documentação  
-- **feature**: manutenção ou ajustes sem impacto no conteúdo principal  
+- **feat ou feature**: nova funcionalidade ou recurso
+- **fix**: correção de bugs
+- **docs**: mudanças na documentação
+- **refactor**: refatoração de código sem mudar funcionalidade
+- **test**: adição ou modificação de testes
+- **chore**: tarefas de manutenção (dependências, configurações, etc)
 
-Não faça commits direto na branch main, abra uma brach para adicionar as alterações
+**Importante:** Não faça commits direto na branch main. Crie uma branch para suas alterações.
 
 
 
