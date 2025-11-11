@@ -2,14 +2,23 @@
 #include <MonitorEnergia.h>
 #include <mqtt.h>
 #include <WiFi.h>
-#include <ServoMotor.h>
+// #include <ServoMotor.h>  // Servo
 #include <pin_declaration.h>
 #include "Motor_Control.h"
+
+// Constantes de calibração
+// Tempo em milissegundos para girar 90 graus.
+#define TURN_90_DEGREES_MS 1000 
 
 #define WIFI_SSID     "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
 #define WIFI_CHANNEL  6
 
+// Fila de Comandos 
+String commandQueue[10];
+int commandCount = 0;
+int currentCommandIndex = 0;
+bool executingCommand = false;
 
 hw_timer_t * inaTmr = NULL;
 MonitorEnergia ina219;
@@ -20,21 +29,14 @@ float EnergiaTotal;
 float EnergiaConsumida = 0;
 unsigned long ultimoTempo;
 volatile bool inaUpdateFlag = false;
-volatile unsigned long desiredDistance_mm = 4000;
-
-// static void wifi_connect(const char* ssid, const char* pass, int channel) {
-//   WiFi.setSleep(false);
-//   WiFi.begin(ssid, pass, channel);
-//   Serial.print("WiFi conectando");
-//   while (WiFi.status() != WL_CONNECTED) { delay(120); Serial.print("."); }
-//   Serial.println(" ✓");
-//   Serial.print("IP: "); Serial.println(WiFi.localIP());
-// }
 
 void IRAM_ATTR InaTmrISR(){
   inaUpdateFlag = true;
 }
 
+void handleSerialInput();
+void executeNextCommand();
+void processLoop();
 
 void setup() {
   Serial.begin(115200);
@@ -57,7 +59,7 @@ void setup() {
 
   ledcAttachPin(PWMA_R, MOTOR_PWMA_CHANNEL);
   ledcAttachPin(PWMB_L, MOTOR_PWMB_CHANNEL);
-
+  
   // wifi_connect(WIFI_SSID, WIFI_PASSWORD, WIFI_CHANNEL);
 
   //Timer Setup
@@ -71,78 +73,139 @@ void setup() {
   }
 
   EnergiaTotal = V_nominal * Capacidade_Ah * 3600.0;
-  ultimoTempo = millis();  
-  
+  ultimoTempo = millis();
 
+// mqtt_init();
 
-  // mqtt_init();
+/* Servo
 
+ServoSetup(PWM_SERVO, 0); // Servo no pino 18, começa em 0°
+MovimentaServo(90, 5000); // Aqui estamos fazendo o servo girar 90° por 5 segundos
+Serial.println("Servo inicializado!");
 
-  ServoSetup(PWM_SERVO, 0);  // Servo no pino 18, começa em 0°
-  MovimentaServo(90, 5000); //Aqui estamos fazendo o servo girar 90° por 5 segundos
-
-  Serial.println("Servo inicializado!");
-
+*/
   
   digitalWrite(STBY, HIGH);
   
   timerAlarmEnable(inaTmr);
   Serial.println("Monitor de energia iniciado!");
-
-  // Função que inicia o movimento em linha reta dos motor com uma distância e velocidade definidas
-  // startGoDistanceMillimeterWithSpeed(200,desiredDistance_mm,DIRECTION_FORWARD);                                                                              
+  Serial.println("Aguardando comandos:");
+  
+  // Teste para boot, comente para não executar automaticamente
+  /* */
+  delay(3000); // Aguarda 3 segundos após boot
+  commandQueue[0] = "andar 1";
+  commandQueue[1] = "GD";
+  commandQueue[2] = "andar 2";
+  commandQueue[3] = "GE";
+  commandCount = 4;
+  Serial.println("Executando comandos");
 }
 
 void loop() {
-  // mqtt_loop();
-
-  
-  bool test = true;
-  while(test == true){
-    test = updateMotor();
-    // Serial.println("Sai do update");
-    if(inaUpdateFlag == true){
-      inaUpdateFlag = false;
-      unsigned long t0 = micros();
-
-      float corrente_mA = ina219.obterCorrente();
-      float corrente = corrente_mA / 1000.0;
-      float tensao = ina219.obterTensao();
-
-      unsigned long agora = millis();
-      float dt = (agora - ultimoTempo) / 1000.0;
-      ultimoTempo = agora;
-
-      float P = tensao * corrente;
-      EnergiaConsumida += P * dt;
-
-      if (EnergiaConsumida > EnergiaTotal) EnergiaConsumida = EnergiaTotal;
-
-      float EnergiaRestante = EnergiaTotal - EnergiaConsumida;
-      float t_restante = (P > 0.001) ? (EnergiaRestante / P) : INFINITY;
-
-      int total_segundos = (int)t_restante;
-      int t_h = total_segundos / 3600;
-      int t_min = (total_segundos % 3600) / 60;
-      float t_seg = t_restante - (t_h *3600) - (t_min * 60);
-
-      Serial.printf("Tensão: %.3f V | Corrente: %.3f mA | Tempo restante: %d h %d min %.3f s (%.2f s)\n",
-                    tensao, corrente_mA, t_h, t_min, t_seg, t_restante);
-
-      unsigned long t1 = micros();
-      unsigned long tempo_exec_us = t1 - t0;
-
-      Serial.printf("Tempo de leitura: %lu us (%.3f ms)\n",
-                    tempo_exec_us, tempo_exec_us / 1000.0);
-      
-    }
-  }
-  // delay(2000);
-  // startGoDistanceMillimeterWithSpeed(255,desiredDistance_mm,DIRECTION_FORWARD);
-  digitalWrite(STBY, LOW);
- 
-
-  // delay(5000);
-
-
+  handleSerialInput();
+  processLoop();
 }
+
+void handleSerialInput() {
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    
+    // Limpa a fila de comandos antes de adicionar novos
+    commandCount = 0;
+    currentCommandIndex = 0;
+
+    int start = 0;
+    int end = input.indexOf(',');
+    while (end != -1) {
+        if (commandCount < 10) {
+            commandQueue[commandCount++] = input.substring(start, end);
+        }
+        start = end + 1;
+        end = input.indexOf(',', start);
+    }
+    if (commandCount < 10) {
+        commandQueue[commandCount++] = input.substring(start);
+    }
+
+    Serial.printf("%d comandos recebidos e enfileirados.\n", commandCount);
+  }
+}
+
+void processLoop() {
+    if (executingCommand) {
+        // Se está executando um comando de movimento ou giro, atualiza o estado
+        if (!updateMotor() && !updateTurn()) {
+            executingCommand = false; // Comando terminou
+            Serial.println("Comando finalizado.");
+        }
+        
+        // Monitoramento de energia durante o movimento
+        if (inaUpdateFlag) {
+            inaUpdateFlag = false;
+            
+            float tensao = ina219.obterTensao();
+            float corrente = ina219.obterCorrente();
+            float potencia = ina219.obterPotencia();
+            
+            unsigned long tempoAtual = millis();
+            float deltaT = (tempoAtual - ultimoTempo) / 1000.0;
+            ultimoTempo = tempoAtual;
+            
+            EnergiaConsumida += potencia * deltaT;
+            float percentualRestante = ((EnergiaTotal - EnergiaConsumida) / EnergiaTotal) * 100.0;
+            
+            Serial.printf("Tensão: %.2fV | Corrente: %.2fmA | Potência: %.2fmW | Bateria: %.1f%%\n",
+                        tensao, corrente, potencia, percentualRestante);
+        }
+    } else if (currentCommandIndex < commandCount) {
+        // Se não está executando nada e há comandos na fila, executa o próximo
+        executeNextCommand();
+    }
+}
+
+void executeNextCommand() {
+    if (currentCommandIndex >= commandCount) return;
+
+    String command = commandQueue[currentCommandIndex];
+    command.trim();
+    currentCommandIndex++;
+    
+    Serial.printf("Executando comando: '%s'\n", command.c_str());
+
+    // Comando: GD (Girar 90° à direita)
+    if (command.equalsIgnoreCase("GD")) {
+        turnDegrees(90);
+        executingCommand = true;
+    } 
+    // Comando: GE (Girar 90° à esquerda)
+    else if (command.equalsIgnoreCase("GE")) {
+        turnDegrees(-90);
+        executingCommand = true;
+    } 
+    // Comando: girar X (X graus - positivo=direita, negativo=esquerda)
+    else if (command.startsWith("girar ")) {
+        String valueStr = command.substring(6);
+        int graus = valueStr.toInt();
+        turnDegrees(graus);
+        executingCommand = true;
+    }
+    // Comando: andar X (X metros - positivo=frente, negativo=ré)
+    else if (command.startsWith("andar ")) {
+        String valueStr = command.substring(6);
+        float metros = valueStr.toFloat();
+        moveMeters(metros);
+        executingCommand = true;
+    } 
+    // Comando desconhecido
+    else {
+        Serial.printf("Comando desconhecido: '%s'\n", command.c_str());
+        Serial.println("Comandos disponíveis:");
+        Serial.println("  GD - Girar 90° à direita");
+        Serial.println("  GE - Girar 90° à esquerda");
+        Serial.println("  girar X - Girar X graus (ex: girar 180, girar -45)");
+        Serial.println("  andar X - Andar X metros (ex: andar 2.5, andar -1.0)");
+    }
+}
+
