@@ -1,8 +1,14 @@
 #include "Arduino.h"
 #include "Motor_Control.h"
 #include <pin_declaration.h>
+#include <Wire.h>
 
 #define SERIAL_DEBUG
+
+// Variáveis para giro por tempo
+static bool turnActive = false;
+static unsigned long turnStartTime = 0;
+static unsigned long turnDuration = 0;
 
 uint8_t DefaultStopMode;        // used for PWM == 0 and STOP_MODE_KEEP
 uint8_t RequestedSpeedPWM = 0; // Last PWM requested for motor. Stopped if RequestedSpeedPWM == 0. It is always >= CurrentCompensatedSpeedPWM
@@ -69,6 +75,10 @@ bool checkAndHandleDirectionChange(uint8_t aRequestedDirection);
 void setSpeedPWMAndDirection(uint8_t aRequestedSpeedPWM, uint8_t aRequestedDirection);
 void setSpeedPWMAndDirectionWithRamp(uint8_t aRequestedSpeedPWM, uint8_t aRequestedDirection) ;
 void resetEncoderControlValues();
+void setMotorDifferential(int pwm_r, int pwm_l);
+
+
+//=======================================================================
 
 
 void IRAM_ATTR handleEncoderInterrupt() {
@@ -453,4 +463,115 @@ unsigned int getSpeed() {
  */
 void resetSpeedValues() {
     EncoderInterruptDeltaMillis = 0;
+}
+
+
+
+// Funções de giro ==================================================================================
+
+
+
+
+// Função para giro por tempo
+void startTurn(unsigned long duration_ms, int direction) {
+    turnDuration = duration_ms;
+    turnActive = true;
+    turnStartTime = millis();
+
+    int pwm = 150; // Velocidade de giro (PWM)
+
+    if (direction > 0) {
+        setMotorDifferential(-pwm, pwm); // Direita
+    } else {
+        setMotorDifferential(pwm, -pwm); // Esquerda
+    }
+}
+
+bool updateTurn() {
+    if (!turnActive) {
+        return false;
+    }
+
+    if (millis() - turnStartTime >= turnDuration) {
+        setMotorDifferential(0, 0);
+        turnActive = false;
+        Serial.println("Giro por tempo finalizado.");
+        return false;
+    }
+
+    return true;
+}
+
+// Função para controle diferencial dos motores
+void setMotorDifferential(int pwm_r, int pwm_l) {
+    // Motor Direito
+    if (pwm_r > 0) {
+        digitalWrite(AIN2_R, LOW);
+        digitalWrite(AIN1_R, HIGH);
+        ledcWrite(MOTOR_PWMA_CHANNEL, pwm_r);
+    } else if (pwm_r < 0) {
+        digitalWrite(AIN1_R, LOW);
+        digitalWrite(AIN2_R, HIGH);
+        ledcWrite(MOTOR_PWMA_CHANNEL, -pwm_r);
+    } else {
+        digitalWrite(AIN1_R, LOW);
+        digitalWrite(AIN2_R, LOW);
+        ledcWrite(MOTOR_PWMA_CHANNEL, 0);
+    }
+
+    // Motor Esquerdo
+    if (pwm_l > 0) {
+        digitalWrite(BIN2_L, LOW);
+        digitalWrite(BIN1_L, HIGH);
+        ledcWrite(MOTOR_PWMB_CHANNEL, pwm_l);
+    } else if (pwm_l < 0) {
+        digitalWrite(BIN1_L, LOW);
+        digitalWrite(BIN2_L, HIGH);
+        ledcWrite(MOTOR_PWMB_CHANNEL, -pwm_l);
+    } else {
+        digitalWrite(BIN1_L, LOW);
+        digitalWrite(BIN2_L, LOW);
+        ledcWrite(MOTOR_PWMB_CHANNEL, 0);
+    }
+}
+
+
+// Funções auxiliares ===============================================================================
+
+// Faz o robô andar X metros (valores positivos = frente, negativos = ré)
+void moveMeters(float meters) {
+    if (meters == 0) {
+        stop(DEFAULT_STOP_MODE);
+        return;
+    }
+    
+    unsigned int mm = abs(meters * 1000);
+    uint8_t direction = (meters > 0) ? DIRECTION_FORWARD : DIRECTION_BACKWARD;
+    uint8_t speed = 200; // Velocidade (ajustável)
+    
+    startGoDistanceMillimeterWithSpeed(speed, mm, direction);
+    
+    Serial.printf("Iniciando movimento: %.2f metros (%d mm) na direção %s\n", 
+                  abs(meters), mm, (direction == DIRECTION_FORWARD) ? "FRENTE" : "RÉ");
+}
+
+// Faz o robô girar X graus (valores positivos = direita, negativos = esquerda)
+void turnDegrees(int degrees) {
+    if (degrees == 0) {
+        return;
+    }
+    
+    // Tempo para girar 90 graus
+    const unsigned long TIME_90_DEGREES = 1000; // ms (ajustável)
+
+    // Calcula tempo proporcional ao ângulo
+    unsigned long time_ms = (abs(degrees) * TIME_90_DEGREES) / 90;
+    
+    // Direção: positivo = direita, negativo = esquerda
+    int direction = (degrees > 0) ? 1 : -1;
+    
+    startTurn(time_ms, direction);
+    
+    Serial.printf("Iniciando giro: %d graus para %s (%lu ms)\n", 
+                  abs(degrees), (direction > 0) ? "DIREITA" : "ESQUERDA", time_ms);
 }

@@ -101,5 +101,12 @@ void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int
         uint8_t aRequestedDirection);
 
 bool updateMotor();
-
 unsigned int getDistanceMillimeter();
+
+// Funções para giro por tempo
+void startTurn(unsigned long duration_ms, int direction);
+bool updateTurn();
+
+// Funções auxiliares pra andar e girar
+void moveMeters(float meters);
+void turnDegrees(int degrees);
