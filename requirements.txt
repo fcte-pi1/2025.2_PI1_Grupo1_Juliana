@@ -4,6 +4,7 @@ pydantic
 sqlalchemy
 psycopg2-binary
 python-dotenv
-paho-mqtt
 pytest
 httpx
+matplotlib
+matplotlib

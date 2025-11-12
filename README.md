@@ -53,4 +53,27 @@ A documentação interativa (Swagger UI) estará disponível em:
 
 ```
 http://127.0.0.1:8000/docs
+
+## Migração Trajectories -> Circuitos
+
+As antigas entidades/rotas Trajectory/Command foram substituídas por Circuito/Trecho para alinhar com o schema do banco (Supabase).
+
+Novas rotas:
+- POST `/circuitos/` — cria um circuito com trechos
+- GET `/circuitos/` — lista circuitos
+- GET `/circuitos/stats` — estatísticas
+
+Rotas de execução/telemetria:
+- POST `/execucoes/simulate` — gera uma execução simulada com logs
+- GET `/execucoes/` — lista execuções
+- GET `/execucoes/{id}` — resumo de uma execução
+- GET `/execucoes/{id}/logs?limit=100` — logs recentes
+- GET `/execucoes/{id}/export/csv` — exporta CSV de logs
+
+Arquivos legados que podem ser removidos com segurança (já não são utilizados):
+- `app/model/trajectory.py`
+- `app/service/trajectory_service.py`
+- `app/controller/trajectory_controller.py`
+
+Obs.: Em ambiente local, a app usa SQLite (quando `DATABASE_URL` não está definido). Para usar Postgres/Supabase, defina `DATABASE_URL` no ambiente.
 ```
