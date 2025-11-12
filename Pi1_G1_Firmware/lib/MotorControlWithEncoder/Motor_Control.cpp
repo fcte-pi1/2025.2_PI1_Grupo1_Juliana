@@ -31,7 +31,7 @@ bool CheckStopConditionInUpdateMotor;
     * Currently SpeedPWMCompensation is in steps of 2 and only one motor can have a positive value, the other is set to zero.
     * Value is computed in EncoderMotor::synchronizeMotor()
     */
-uint8_t SpeedPWMCompensation = 2;   // Positive value to be subtracted from TargetPWM
+uint8_t SpeedPWMCompensation = 9;   // Positive value to be subtracted from TargetPWM
 
 /*
     * Distance optocoupler impulse counter. It is reset at startGoDistanceCount if motor was stopped.
@@ -59,7 +59,7 @@ volatile unsigned long LastEncoderInterruptMillis; // used internal for debounci
 void resetSpeedValues(); 
 unsigned int getSpeed();
 unsigned int getBrakingDistanceMillimeter();
-unsigned int getDistanceMillimeter() ;
+// unsigned int getDistanceMillimeter() ;
 bool isStopped();
 void stop(uint8_t aStopMode);
 void setMotorDriverMode(uint8_t aMotorDriverMode);

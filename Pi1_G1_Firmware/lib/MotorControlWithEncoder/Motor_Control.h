@@ -101,3 +101,5 @@ void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int
         uint8_t aRequestedDirection);
 
 bool updateMotor();
+
+unsigned int getDistanceMillimeter();

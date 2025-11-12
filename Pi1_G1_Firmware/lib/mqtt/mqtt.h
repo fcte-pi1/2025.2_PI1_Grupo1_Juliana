@@ -20,3 +20,5 @@ PubSubClient& mqtt_client();
 using MqttMsgCb = void (*)(const char* topic, const char* payload, unsigned int len);
 void mqtt_on_message(MqttMsgCb cb);
 bool mqtt_subscribe(const char* topic, uint8_t qos = 0);
+
+void my_led_bind_cmd_topic(const char* topic);

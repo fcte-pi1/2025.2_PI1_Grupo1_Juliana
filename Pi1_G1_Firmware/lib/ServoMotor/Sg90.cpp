@@ -14,7 +14,7 @@ void Sg90::attach(int pin){
 }
 
 void Sg90::write(int value){
-  int duty = (value / (-6.92)) + 33;
+  int duty = (value / (6.92)) + 7;
   ledcWrite(SG90_PWM_CHANNEL, duty);
-  delay(50);
+  delay(500);
 }

@@ -21,6 +21,7 @@ static const size_t  MAX_SUBS = 8;
 static String        s_subTopics[MAX_SUBS];
 static uint8_t       s_subQos[MAX_SUBS];
 static size_t        s_subCount = 0;
+static String  s_cmd_topic;
 
 static void resubscribe_all() {
   for (size_t i = 0; i < s_subCount; ++i) {
@@ -138,4 +139,19 @@ bool mqtt_subscribe(const char* topic, uint8_t qos) {
   Serial.print("[MQTT] subscribe "); Serial.print(topic);
   Serial.print(" => "); Serial.println(ok ? "OK" : "FAIL");
   return ok;
+}
+
+static void led_cmd_handler(const char* topic, const char* payload, unsigned int len) {
+  if (s_cmd_topic.length() == 0) return;
+  if (!topic || strcmp(topic, s_cmd_topic.c_str()) != 0) return;
+  if (!payload) return;
+  Serial.println(payload);
+}
+
+void my_led_bind_cmd_topic(const char* topic) {
+  if (!topic) return;
+  s_cmd_topic = topic;
+  mqtt_on_message(led_cmd_handler);
+  mqtt_subscribe(s_cmd_topic.c_str(), 0);
+  Serial.print("[LED] bind cmd topic = "); Serial.println(s_cmd_topic);
 }
