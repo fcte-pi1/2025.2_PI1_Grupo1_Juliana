@@ -1,4 +1,5 @@
 from typing import Generator
+import pytest
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -36,4 +37,10 @@ app.dependency_overrides[get_db] = override_get_db
 
 def get_client() -> TestClient:
     return TestClient(app)
+
+
+# Compatibilidade com testes antigos que esperam uma fixture `client`
+@pytest.fixture()
+def client() -> TestClient:
+    return get_client()
 
