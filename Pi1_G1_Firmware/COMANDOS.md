@@ -5,75 +5,89 @@
 O robô utiliza um sistema de **fila de comandos** que permite:
 - Enfileirar até **10 comandos** por vez
 - Executar comandos **sequencialmente** (um de cada vez)
-- Enviar múltiplos comandos **separados por vírgula**
+- Enviar múltiplos comandos em uma única linha
 - Monitorar **energia em tempo real** durante a execução
 
 ### Como Funciona
 1. Você envia comandos via **Serial Monitor** (115200 baud)
-2. Os comandos são armazenados na `commandQueue[]`
+2. Os comandos são armazenados na `commandQueue[]` (array de caracteres)
 3. O robô executa cada comando **completamente** antes de passar para o próximo
 4. Durante a execução, o sistema monitora **tensão, corrente e bateria**
 
 ## Comandos Disponíveis
 
-### 1. Movimentação Linear
+O sistema usa **comandos de um único caractere** para simplicidade e eficiência:
 
-#### `andar X`
-Move o robô X metros para frente ou para trás.
-- **X > 0**: Move para frente
-- **X < 0**: Move para trás
+### Comandos de Movimento
 
-**Exemplos:**
-```
-andar 2.5     → Anda 2.5 metros para frente
-andar -1.0    → Anda 1.0 metro para trás
-andar 0.5     → Anda 50 centímetros para frente
-```
+| Comando | Descrição | Distância |
+|---------|-----------|-----------|
+| **F** | Frente (Forward) | 1 metro |
+| **T** | Trás (Backward) | 1 metro |
 
-### 2. Rotação
+### Comandos de Rotação
 
-#### `GD`
-Gira 90° para a direita.
+| Comando | Descrição | Ângulo |
+|---------|-----------|--------|
+| **D** | Direita (Right) | 90° |
+| **E** | Esquerda (Left) | 90° |
 
-**Exemplo:**
-```
-GD    → Gira 90° à direita
-```
+### Detalhes dos Comandos
 
-#### `GE`
-Gira 90° para a esquerda.
+#### `F` - Andar para Frente
+Move o robô **1 metro** para frente.
 
 **Exemplo:**
 ```
-GE    → Gira 90° à esquerda
+F    → Anda 1 metro para frente
 ```
 
-#### `girar X`
-Gira X graus.
-- **X > 0**: Gira para a direita
-- **X < 0**: Gira para a esquerda
+#### `T` - Andar para Trás
+Move o robô **1 metro** para trás.
 
-**Exemplos:**
+**Exemplo:**
 ```
-girar 180     → Gira 180° à direita (meia-volta)
-girar -45     → Gira 45° à esquerda
-girar 360     → Gira 360° à direita (volta completa)
+T    → Anda 1 metro para trás (ré)
+```
+
+#### `D` - Girar à Direita
+Gira o robô **90°** para a direita (sentido horário).
+
+**Exemplo:**
+```
+D    → Gira 90° à direita
+```
+
+#### `E` - Girar à Esquerda
+Gira o robô **90°** para a esquerda (sentido anti-horário).
+
+**Exemplo:**
+```
+E    → Gira 90° à esquerda
 ```
 
 ## Enviando Múltiplos Comandos
 
-### Sintaxe: Comandos separados por vírgula
+### Sintaxe
+
+Basta digitar os caracteres de comando em sequência:
 
 ```
-comando1, comando2, comando3, ...
+FDFE    → Frente, Direita, Frente, Esquerda
+```
+
+```
+F D F E         → Mesmo que FDFE
+F, D, F, E      → Mesmo que FDFE
+F,D,F,E         → Mesmo que FDFE
 ```
 
 **Limite:** Até 10 comandos por envio
 
 ### Como a Fila Funciona:
 
-1. **Envio:** Você digita os comandos separados por vírgula e pressiona Enter
-2. **Parsing:** O sistema divide os comandos e armazena na `commandQueue[]`
+1. **Envio:** Você digita os comandos (ex: `FDFE`) e pressiona Enter
+2. **Parsing:** O sistema extrai apenas os caracteres válidos (F, T, D, E) e ignora espaços/vírgulas
 3. **Execução Sequencial:** 
    - O robô executa o **primeiro** comando
    - Aguarda até o comando **finalizar completamente**
@@ -82,82 +96,109 @@ comando1, comando2, comando3, ...
 
 4. **Feedback:** O Serial Monitor mostra:
    ```
-   3 comandos recebidos e enfileirados.
-   Executando comando: 'andar 2'
-   Iniciando movimento: 2.00 metros (2000 mm) na direção FRENTE
+   4 comandos recebidos e enfileirados.
+   Executando comando: 'F'
+   Iniciando movimento: 1.00 metros (1000 mm) na direção FRENTE
    Tensão: 6.12V | Corrente: 245.30mA | Potência: 1501.23mW | Bateria: 98.5%
    Comando finalizado.
-   Executando comando: 'GD'
+   Executando comando: 'D'
+   Iniciando giro: 90 graus para DIREITA (500 ms)
    ...
    ```
 
 ### Exemplos de Uso:
 
-**Exemplo 1: Percurso Simples**
+**Exemplo 1: Quadrado (1m × 1m)**
 ```
-andar 2, GD, andar 1.5
+FDFDFDFD
+```
+ou com espaços para melhor leitura:
+```
+F D F D F D F D
 ```
 **O que acontece:**
-1. Robô anda 2m para frente → aguarda finalizar
-2. Robô gira 90° à direita → aguarda finalizar  
-3. Robô anda 1.5m para frente → aguarda finalizar
+1. Frente 1m → Direita 90° → Frente 1m → Direita 90° → Frente 1m → Direita 90° → Frente 1m → Direita 90°
+2. Resultado: Quadrado completo retornando à posição inicial
 
-**Exemplo 2: Retorno ao Ponto Inicial**
+**Exemplo 2: Ida e Volta**
 ```
-andar 1, girar 180, andar 1
+FFFDDFFFF
 ```
 **O que acontece:**
-1. Anda 1m para frente
-2. Gira 180° (meia-volta)
-3. Anda 1m (volta ao início)
+1. Frente 3m (FFF)
+2. Meia-volta (DD = 180°)
+3. Frente 4m (FFFF)
 
-**Exemplo 3: Quadrado de 2x2 metros**
+**Exemplo 3: Zigue-zague**
 ```
-andar 2, GD, andar 2, GD, andar 2, GD, andar 2, GD
+FDFEFDFEF
 ```
 **O que acontece:**
-- 8 comandos enfileirados
-- Executa lado por lado até completar o quadrado
+- F → D → F → E → F → D → F → E → F
+- Cria um padrão em zigue-zague
+
+**Exemplo 4: Octógono**
+```
+FDFDFDFDFDFDFDF
+```
+**O que acontece:**
+- 8 vezes: Frente + Direita (cada giro de 45° seria ideal, mas com 90° faz um padrão interessante)
+
+**Exemplo 5: Exploração em Cruz**
+```
+FFDDFFFFTFF
+```
+**O que acontece:**
+1. FF - Frente 2m
+2. DD - Meia volta (180°)
+3. FFFF - Frente 4m (passa ponto inicial)
+4. T - Ré 1m
+5. FF - Frente 2m
 
 ### Importante:
 
+- **Case insensitive:** Tanto `fdfe` quanto `FDFE` quanto `FdFe` funcionam
 - **Novos comandos SUBSTITUEM a fila anterior:** Se você enviar novos comandos enquanto outros estão executando, a fila é **limpa** e reiniciada
 - **Máximo de 10 comandos:** Comandos extras serão ignorados
-- **Espaços são ignorados:** `andar 2,GD,andar 1` funciona igual a `andar 2, GD, andar 1`
+- **Espaços e vírgulas são ignorados:** `F D F E` = `F,D,F,E` = `FDFE`
+- **Caracteres inválidos são ignorados:** `F123D456` será lido como `FD`
 
 ## Calibração
 
-### Calibrar o Giro (IMPORTANTE!)
+### Calibrar o Giro
 
-O tempo para girar 90° depende de vários fatores:
-- Peso do robô
-- Tipo de superfície
-- Voltagem da bateria
-- Tipo de rodas
+> **Giro por Encoder**  
+> O sistema agora usa **contagem de pulsos do encoder** para controle de giro, tornando-o **independente de voltagem**.
 
-**Para calibrar:**
-
-1. Abra o arquivo `Pi1_G1_Firmware/lib/MotorControlWithEncoder/Motor_Control.cpp`
-2. Localize a linha na função `girarGraus()`:
-   ```cpp
-   const unsigned long TEMPO_90_GRAUS = 1000; // tempo em ms
-   ```
-3. Execute o comando `GD` ou `girar 90`
-4. Observe quantos graus o robô realmente girou
-5. Ajuste o valor:
-   - Se girou **menos** que 90°: **AUMENTE** o valor
-   - Se girou **mais** que 90°: **DIMINUA** o valor
-6. Recompile e teste novamente
-
-**Fórmula para ajuste rápido:**
+**Valor Atual de Calibração:**
+```cpp
+#define ENCODER_COUNTS_PER_90_DEGREES 20  // pulsos necessários para 90°
 ```
-Novo_Valor = Valor_Atual * (90 / Graus_Girados_Realmente)
+
+**Calibração Simplificada:**
+
+1. Execute o comando `D` (girar 90° à direita)
+2. Observe o Serial Monitor:
+   ```
+   Iniciando giro por ENCODER: 90 graus (10 pulsos)
+   Pulsos: 8/10 (faltam 2)
+   Giro por ENCODER finalizado! Total de pulsos: 10
+   ```
+3. Meça o ângulo real girado com transferidor ou app
+4. Ajuste a constante no arquivo `Motor_Control.h`:
+   - **Se girou MENOS que 90°**: DIMINUA o valor
+   - **Se girou MAIS que 90°**: AUMENTE o valor
+
+**Fórmula para ajuste:**
+```
+Novo_Pulsos = Pulsos_Atual × (90 / Ângulo_Real)
 ```
 
 **Exemplo:**
-- Valor atual: 1000ms
-- Girou apenas 60°
-- Novo valor = 1000 * (90/60) = 1500ms
+- Valor atual: 10 pulsos
+- Girou: 110° (muito)
+- Novo valor = 10 × (90/110) ≈ 8 pulsos
+
 
 ### Calibrar a Distância
 
@@ -167,24 +208,41 @@ A distância percorrida é calculada através dos encoders. Se notar imprecisão
 2. Meça o perímetro real das suas rodas em milímetros
 3. Ajuste o valor conforme necessário
 
+**Valor Atual:** `DEFAULT_CIRCUMFERENCE_MILLIMETER = 227mm` (ajustado de 204mm)
+
+**Fórmula:**
+```
+Novo_Valor = Valor_Atual * (Distância_Esperada / Distância_Real)
+```
+
+**Exemplo:**
+- Comando: `F` (deve andar 1m = 1000mm)
+- Andou: 900mm
+- Ajuste: 227 * (1000/900) ≈ 252mm
+
 ## Monitoramento via Serial
 
 O robô envia feedback em tempo real pela porta serial (115200 baud):
 
 ### Mensagens da Fila de Comandos:
 ```
-3 comandos recebidos e enfileirados.           ← Confirma quantos comandos foram adicionados
-Executando comando: 'andar 2'                  ← Inicia execução do comando atual
-Iniciando movimento: 2.00 metros (2000 mm) na direção FRENTE
+4 comandos recebidos e enfileirados.           ← Confirma quantos comandos foram adicionados
+Executando comando: 'F'                        ← Inicia execução do comando atual
+Iniciando movimento: 1.00 metros (1000 mm) na direção FRENTE
+PWM setado: 200
+PWM compensado: 191
 Ramp Up started at: 0
 Drive started at: 220
 Tensão: 6.12V | Corrente: 245.30mA | Potência: 1501.23mW | Bateria: 98.5%  ← Monitoramento em tempo real
+Ramp Down started at: 880
 Comando finalizado.                            ← Comando completado, passa para o próximo
-Executando comando: 'GD'
-Iniciando giro: 90 graus para DIREITA (1000 ms)
+Executando comando: 'D'
+Iniciando giro: 90 graus para DIREITA (500 ms)
 Tensão: 6.08V | Corrente: 312.45mA | Potência: 1899.67mW | Bateria: 97.8%
 Giro por tempo finalizado.
 Comando finalizado.
+Executando comando: 'F'
+...
 ```
 
 ### Informações Exibidas:
@@ -203,35 +261,80 @@ Comando finalizado.
 
 ## Exemplos Práticos
 
-### Exemplo 1: Quadrado (8 comandos)
+### Exemplo 1: Quadrado 1m × 1m (8 comandos)
 ```
-andar 1, GD, andar 1, GD, andar 1, GD, andar 1, GD
+FDFDFDFD
 ```
-**Fila:** [andar 1] → [GD] → [andar 1] → [GD] → [andar 1] → [GD] → [andar 1] → [GD]
+ou com espaços:
+```
+F D F D F D F D
+```
+**Fila:** [F] → [D] → [F] → [D] → [F] → [D] → [F] → [D]
+**Resultado:** Quadrado completo de 1 metro por lado
 
-### Exemplo 2: Triângulo Equilátero (6 comandos)
+### Exemplo 2: Retângulo 2m × 1m (8 comandos)
 ```
-andar 1, girar 120, andar 1, girar 120, andar 1, girar 120
+FFDFFDFFD
 ```
-**Fila:** [andar 1] → [girar 120] → [andar 1] → [girar 120] → [andar 1] → [girar 120]
+**Fila:** [F] → [F] → [D] → [F] → [F] → [D] → [F] → [F] → [D]
+**Resultado:** Retângulo com lados de 2m e 1m alternados
 
-### Exemplo 3: Percurso Complexo (7 comandos)
+### Exemplo 3: Exploração em "L" (4 comandos)
 ```
-andar 2, GD, andar 1.5, GE, andar 1, girar 180, andar 0.5
+FFDF
 ```
-**Fila:** [andar 2] → [GD] → [andar 1.5] → [GE] → [andar 1] → [girar 180] → [andar 0.5]
+**Fila:** [F] → [F] → [D] → [F]
+**Resultado:** Anda 2m, vira direita, anda 1m
 
-### Exemplo 4: Zigue-zague (7 comandos)
+### Exemplo 4: Meia-volta e retorno (5 comandos)
 ```
-andar 0.5, girar 45, andar 0.5, girar -90, andar 0.5, girar 45, andar 0.5
+FFDDF
 ```
-**Fila:** [andar 0.5] → [girar 45] → [andar 0.5] → [girar -90] → [andar 0.5] → [girar 45] → [andar 0.5]
+**Fila:** [F] → [F] → [D] → [D] → [F]
+**Resultado:** Anda 2m, gira 180° (DD), anda 1m de volta
 
-### Exemplo 5: Teste de Bateria (3 comandos longos)
+### Exemplo 5: Teste de Bateria - Percurso Longo (10 comandos)
 ```
-andar 5, girar 360, andar -5
+FFFFFFFFFF
 ```
-Útil para monitorar o consumo de energia em percursos longos
+**Fila:** 10× [F]
+**Resultado:** Anda 10 metros total (útil para monitorar consumo de energia)
+
+### Exemplo 6: Padrão em Cruz (9 comandos)
+```
+FFDFFDDFF
+```
+**Fila:** [F] → [F] → [D] → [F] → [F] → [D] → [D] → [F] → [F]
+**Resultado:** 
+- Anda 2m
+- Vira direita, anda 2m
+- Meia-volta, anda 2m (volta)
+
+### Exemplo 7: Octógono Aproximado (8 comandos)
+```
+FDFDFDFDF
+```
+**Resultado:** Cria um padrão octogonal (cada giro de 90° cria forma aproximada)
+
+### Exemplo 8: Teste de Ré (4 comandos)
+```
+FTFT
+```
+**Fila:** [F] → [T] → [F] → [T]
+**Resultado:** Frente 1m, ré 1m, frente 1m, ré 1m
+
+### Exemplo 9: Percurso Alternado (6 comandos)
+```
+FDEFTF
+```
+**Fila:** [F] → [D] → [E] → [F] → [T] → [F]
+**Resultado:** Frente, direita, esquerda (volta posição), frente, ré, frente
+
+### Exemplo 10: Máximo de Comandos (10 comandos)
+```
+FDFEFDFEFD
+```
+**Resultado:** Padrão complexo com 10 movimentos
 
 ## Solução de Problemas
 
@@ -260,22 +363,41 @@ andar 5, girar 360, andar -5
 ### Fila de comandos trava
 - Reinicie o ESP32 (botão RESET)
 - Verifique se `executingCommand` está funcionando corretamente
-- Envie um comando simples para limpar a fila: `andar 0`
+- Envie um novo comando para limpar e reiniciar a fila
+
+### Comandos não são aceitos
+- Verifique se está usando caracteres válidos: F, T, D, E
+- Confirme que o Serial Monitor está em 115200 baud
+- Tente enviar comandos em maiúscula (embora minúscula também funcione)
 
 ## Especificações Técnicas
 
 ### Sistema de Controle
 - **Velocidade padrão**: PWM 200 (ajustável)
+- **Velocidade de giro**: PWM 150 normal, 80 final (ajustável)
 - **Resolução dos encoders**: 20 pulsos por rotação
+- **Perímetro da roda**: 227mm (ajustado de 204mm)
 - **Precisão de distância**: ±10mm (em superfície lisa)
+- **Precisão de giro**: ±2°
 - **Taxa de atualização**: 20ms por ciclo de controle
+- **Método de giro**: Contagem de pulsos do encoder (independente de voltagem)
+- **Pulsos para 90°**: 10 pulsos (ajustável via `ENCODER_COUNTS_PER_90_DEGREES`)
 
 ### Fila de Comandos (Command Queue)
 - **Capacidade máxima**: 10 comandos
-- **Array**: `String commandQueue[10]`
+- **Array**: `char commandQueue[10]`
+- **Tipo de dados**: Caracteres simples (F, T, D, E)
 - **Contador**: `commandCount` (0-10)
 - **Índice atual**: `currentCommandIndex`
 - **Flag de execução**: `executingCommand` (bool)
+
+### Comandos Disponíveis
+| Comando | Tipo | Parâmetro Fixo |
+|---------|------|----------------|
+| F | Movimento | 1.0 metro frente |
+| T | Movimento | 1.0 metro trás |
+| D | Rotação | 90° direita |
+| E | Rotação | 90° esquerda |
 
 ### Monitoramento de Energia
 - **Sensor**: INA219
@@ -289,5 +411,7 @@ andar 5, girar 360, andar -5
 
 ### Comunicação Serial
 - **Baud rate**: 115200
-- **Formato de entrada**: Comandos separados por vírgula
+- **Formato de entrada**: Sequência de caracteres (ex: `FDFE`)
+- **Caracteres válidos**: F, T, D, E (case insensitive)
+- **Separadores aceitos**: Espaço, vírgula (ignorados)
 - **Feedback**: Tempo real durante execução
