@@ -5,10 +5,16 @@
 
 #define SERIAL_DEBUG
 
-// Variáveis para giro por tempo
+// Variáveis para giro por tempo (fallback)
 static bool turnActive = false;
 static unsigned long turnStartTime = 0;
 static unsigned long turnDuration = 0;
+
+// Variáveis para giro por encoder
+static bool turnWithEncoderActive = false;
+static unsigned int turnTargetEncoderCount = 0;
+static unsigned int turnStartEncoderCount = 0;
+static int turnDirectionEncoder = 0;
 
 uint8_t DefaultStopMode;        // used for PWM == 0 and STOP_MODE_KEEP
 uint8_t RequestedSpeedPWM = 0; // Last PWM requested for motor. Stopped if RequestedSpeedPWM == 0. It is always >= CurrentCompensatedSpeedPWM
@@ -488,6 +494,12 @@ void startTurn(unsigned long duration_ms, int direction) {
 }
 
 bool updateTurn() {
+    // Prioriza giro por encoder se estiver ativo
+    if (turnWithEncoderActive) {
+        return updateTurnWithEncoder();
+    }
+    
+    // Fallback: giro por tempo
     if (!turnActive) {
         return false;
     }
@@ -499,6 +511,94 @@ bool updateTurn() {
         return false;
     }
 
+    return true;
+}
+
+// Função para giro por encoder
+void startTurnWithEncoder(int degrees) {
+    if (degrees == 0) {
+        return;
+    }
+    
+    // calcula qtd pulsos p girar
+    unsigned int encoder_counts_needed = (abs(degrees) * ENCODER_COUNTS_PER_90_DEGREES) / 90; // ajustavel
+    
+    turnTargetEncoderCount = encoder_counts_needed;
+    turnStartEncoderCount = EncoderCount;
+    turnDirectionEncoder = (degrees > 0) ? 1 : -1;
+    turnWithEncoderActive = true;
+    
+    int pwm = 150; // vel de giro (PWM)
+    
+    if (turnDirectionEncoder > 0) {
+        setMotorDifferential(-pwm, pwm); // Direita
+    } else {
+        setMotorDifferential(pwm, -pwm); // Esquerda
+    }
+    
+    #ifdef SERIAL_DEBUG
+    Serial.printf("Iniciando giro: %d graus (%d pulsos)\n", 
+                  abs(degrees), encoder_counts_needed);
+    #endif
+}
+
+bool updateTurnWithEncoder() {
+    if (!turnWithEncoderActive) {
+        return false;
+    }
+    
+    // quantos pulsos já foram percorridos
+    unsigned int encoder_counts_traveled = EncoderCount - turnStartEncoderCount;
+    unsigned int encoder_counts_remaining = turnTargetEncoderCount - encoder_counts_traveled;
+    
+    // Debug a cada 100ms
+    #ifdef SERIAL_DEBUG
+    static unsigned long lastDebugPrint = 0;
+    if (millis() - lastDebugPrint > 100) {
+        Serial.printf("Pulsos: %d/%d (faltam %d)\n", 
+                      encoder_counts_traveled, turnTargetEncoderCount, encoder_counts_remaining);
+        lastDebugPrint = millis();
+    }
+    #endif
+    
+    // verifica se atingiu o alvo
+    if (encoder_counts_traveled >= turnTargetEncoderCount) {
+        setMotorDifferential(0, 0);
+        turnWithEncoderActive = false;
+        
+        #ifdef SERIAL_DEBUG
+        Serial.printf("Giro finalizado, Total de pulsos: %d\n", encoder_counts_traveled);
+        #endif
+        
+        return false;
+    }
+    
+    // reduz vel próximo ao alvo p evitar ultrapassar
+    if (encoder_counts_remaining <= 2) {
+        int pwm = 80;
+        if (turnDirectionEncoder > 0) {
+            setMotorDifferential(-pwm, pwm);
+        } else {
+            setMotorDifferential(pwm, -pwm);
+        }
+    }
+
+    // timeout de 5 segundos
+    static unsigned long turnStartTimeEncoder = 0;
+    if (encoder_counts_traveled == 0 && turnStartTimeEncoder == 0) {
+        turnStartTimeEncoder = millis();
+    }
+    if (millis() - turnStartTimeEncoder > 5000) {
+        setMotorDifferential(0, 0);
+        turnWithEncoderActive = false;
+        turnStartTimeEncoder = 0;
+        Serial.println("TIMEOUT: Giro por encoder excedeu 5 segundos!");
+        return false;
+    }
+    if (encoder_counts_traveled > 0) {
+        turnStartTimeEncoder = 0; // reset timeout se já está girando
+    }
+    
     return true;
 }
 
@@ -561,17 +661,16 @@ void turnDegrees(int degrees) {
         return;
     }
     
-    // Tempo para girar 90 graus
-    const unsigned long TIME_90_DEGREES = 1000; // ms (ajustável)
-
-    // Calcula tempo proporcional ao ângulo
+    startTurnWithEncoder(degrees);
+    Serial.printf("Iniciando giro,: %d graus para %s\n", 
+                  abs(degrees), (degrees > 0) ? "DIREITA" : "ESQUERDA");
+    
+    /* antigo, para caso de fallback
+    const unsigned long TIME_90_DEGREES = 530; // ms (ajustável)
     unsigned long time_ms = (abs(degrees) * TIME_90_DEGREES) / 90;
-    
-    // Direção: positivo = direita, negativo = esquerda
     int direction = (degrees > 0) ? 1 : -1;
-    
     startTurn(time_ms, direction);
-    
-    Serial.printf("Iniciando giro: %d graus para %s (%lu ms)\n", 
+    Serial.printf("Iniciando giro POR TEMPO: %d graus para %s (%lu ms)\n", 
                   abs(degrees), (direction > 0) ? "DIREITA" : "ESQUERDA", time_ms);
+    */
 }

@@ -49,7 +49,7 @@
 #define MAX_SPEED_PWM                        255L // Long constant, otherwise we get "integer overflow in expression"
 
 
-#define DEFAULT_CIRCUMFERENCE_MILLIMETER     204
+#define DEFAULT_CIRCUMFERENCE_MILLIMETER     227
 #define FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT  ((DEFAULT_CIRCUMFERENCE_MILLIMETER + (ENCODER_COUNTS_PER_FULL_ROTATION / 2)) / ENCODER_COUNTS_PER_FULL_ROTATION) // = 11
 
 /*
@@ -57,6 +57,8 @@
  * To get cm/s, use (circumference[cm]/countsPerCircumference) * 1000 / millis per tick
  */
 #define SPEED_SCALE_VALUE ((100L * DEFAULT_CIRCUMFERENCE_MILLIMETER) / ENCODER_COUNTS_PER_FULL_ROTATION) // 1100
+
+#define ENCODER_COUNTS_PER_90_DEGREES        20  // Pulsos do encoder necessários para girar 90° (ajustável)
 
 
 // Corresponds to 2 volt. At 2 volt I measured around 32 cm/s. PWM=127 for 4 volt VCC, 68 for 7.4 volt VCC
@@ -103,9 +105,13 @@ void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int
 bool updateMotor();
 unsigned int getDistanceMillimeter();
 
-// Funções para giro por tempo
+// Funções para giro por tempo (fallback)
 void startTurn(unsigned long duration_ms, int direction);
 bool updateTurn();
+
+// Funções para giro por encoder
+void startTurnWithEncoder(int degrees);
+bool updateTurnWithEncoder();
 
 // Funções auxiliares pra andar e girar
 void moveMeters(float meters);
