@@ -15,7 +15,8 @@
 #define WIFI_CHANNEL  6
 
 // Fila de Comandos 
-String commandQueue[10];
+// F = Frente, T = Trás, D = Direita, E = Esquerda
+char commandQueue[10];
 int commandCount = 0;
 int currentCommandIndex = 0;
 bool executingCommand = false;
@@ -94,12 +95,8 @@ Serial.println("Servo inicializado!");
   // Teste para boot, comente para não executar automaticamente
   /* */
   delay(3000); // Aguarda 3 segundos após boot
-  commandQueue[0] = "andar 1";
-  commandQueue[1] = "GD";
-  commandQueue[2] = "andar 2";
-  commandQueue[3] = "GE";
-  commandCount = 4;
-  Serial.println("Executando comandos");
+  commandQueue[0] = 'D';  // Direita
+  commandCount = 1;
 }
 
 void loop() {
@@ -111,22 +108,22 @@ void handleSerialInput() {
   if (Serial.available() > 0) {
     String input = Serial.readStringUntil('\n');
     input.trim();
+    input.toUpperCase(); // Converter as cases de in para maiúsculas
     
     // Limpa a fila de comandos antes de adicionar novos
     commandCount = 0;
     currentCommandIndex = 0;
 
-    int start = 0;
-    int end = input.indexOf(',');
-    while (end != -1) {
-        if (commandCount < 10) {
-            commandQueue[commandCount++] = input.substring(start, end);
+    // cada caractere como um comando
+    for (int i = 0; i < input.length() && commandCount < 10; i++) {
+        char c = input.charAt(i);
+        // ignora espaços e vírgulas
+        if (c != ' ' && c != ',') {
+            // aceita apenas F, T, D, E
+            if (c == 'F' || c == 'T' || c == 'D' || c == 'E') {
+                commandQueue[commandCount++] = c;
+            }
         }
-        start = end + 1;
-        end = input.indexOf(',', start);
-    }
-    if (commandCount < 10) {
-        commandQueue[commandCount++] = input.substring(start);
     }
 
     Serial.printf("%d comandos recebidos e enfileirados.\n", commandCount);
@@ -168,44 +165,39 @@ void processLoop() {
 void executeNextCommand() {
     if (currentCommandIndex >= commandCount) return;
 
-    String command = commandQueue[currentCommandIndex];
-    command.trim();
+    char command = commandQueue[currentCommandIndex];
     currentCommandIndex++;
     
-    Serial.printf("Executando comando: '%s'\n", command.c_str());
+    Serial.printf("Executando comando: '%c'\n", command);
 
-    // Comando: GD (Girar 90° à direita)
-    if (command.equalsIgnoreCase("GD")) {
+    // Comando: F (Frente - andar 1 metro)
+    if (command == 'F') {
+        moveMeters(1.0);
+        executingCommand = true;
+    } 
+    // Comando: T (Trás - andar 1 metro para trás)
+    else if (command == 'T') {
+        moveMeters(-1.0);
+        executingCommand = true;
+    } 
+    // Comando: D (Direita - girar 90° à direita)
+    else if (command == 'D') {
         turnDegrees(90);
         executingCommand = true;
     } 
-    // Comando: GE (Girar 90° à esquerda)
-    else if (command.equalsIgnoreCase("GE")) {
+    // Comando: E (Esquerda - girar 90° à esquerda)
+    else if (command == 'E') {
         turnDegrees(-90);
-        executingCommand = true;
-    } 
-    // Comando: girar X (X graus - positivo=direita, negativo=esquerda)
-    else if (command.startsWith("girar ")) {
-        String valueStr = command.substring(6);
-        int graus = valueStr.toInt();
-        turnDegrees(graus);
-        executingCommand = true;
-    }
-    // Comando: andar X (X metros - positivo=frente, negativo=ré)
-    else if (command.startsWith("andar ")) {
-        String valueStr = command.substring(6);
-        float metros = valueStr.toFloat();
-        moveMeters(metros);
         executingCommand = true;
     } 
     // Comando desconhecido
     else {
-        Serial.printf("Comando desconhecido: '%s'\n", command.c_str());
+        Serial.printf("Comando desconhecido: '%c'\n", command);
         Serial.println("Comandos disponíveis:");
-        Serial.println("  GD - Girar 90° à direita");
-        Serial.println("  GE - Girar 90° à esquerda");
-        Serial.println("  girar X - Girar X graus (ex: girar 180, girar -45)");
-        Serial.println("  andar X - Andar X metros (ex: andar 2.5, andar -1.0)");
+        Serial.println("  F - Andar 1 metro para frente");
+        Serial.println("  T - Andar 1 metro para trás");
+        Serial.println("  D - Girar 90° à direita");
+        Serial.println("  E - Girar 90° à esquerda");
     }
 }
 
