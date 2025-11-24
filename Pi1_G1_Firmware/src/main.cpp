@@ -2,7 +2,7 @@
 #include <MonitorEnergia.h>
 #include <mqtt.h>
 #include <WiFi.h>
-// #include <ServoMotor.h>  // Servo
+#include <ServoMotor.h>  // Servo
 #include <pin_declaration.h>
 #include "Motor_Control.h"
 
@@ -78,13 +78,13 @@ void setup() {
 
 // mqtt_init();
 
-/* Servo
+//* Servo
 
 ServoSetup(PWM_SERVO, 0); // Servo no pino 18, começa em 0°
 MovimentaServo(90, 5000); // Aqui estamos fazendo o servo girar 90° por 5 segundos
 Serial.println("Servo inicializado!");
 
-*/
+
   
   digitalWrite(STBY, HIGH);
   
@@ -95,7 +95,8 @@ Serial.println("Servo inicializado!");
   // Teste para boot, comente para não executar automaticamente
   /* */
   delay(3000); // Aguarda 3 segundos após boot
-  commandQueue[0] = 'D';  // Direita
+  // commandQueue[0] = 'D';  // Direita
+  commandQueue[0] = 'F';
   commandCount = 1;
 }
 

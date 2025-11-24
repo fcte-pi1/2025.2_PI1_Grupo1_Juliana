@@ -43,7 +43,7 @@ bool CheckStopConditionInUpdateMotor;
     * Currently SpeedPWMCompensation is in steps of 2 and only one motor can have a positive value, the other is set to zero.
     * Value is computed in EncoderMotor::synchronizeMotor()
     */
-uint8_t SpeedPWMCompensation = 9;   // Positive value to be subtracted from TargetPWM
+uint8_t SpeedPWMCompensation = 13    ;   // Positive value to be subtracted from TargetPWM
 
 /*
     * Distance optocoupler impulse counter. It is reset at startGoDistanceCount if motor was stopped.
@@ -116,6 +116,9 @@ void encoderInit (){
  */
 void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int aRequestedDistanceMillimeter,
         uint8_t aRequestedDirection) {
+#if defined(SERIAL_DEBUG)        
+        Serial.printf("Distance ratio: %d\n", FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT);
+#endif
     if (aRequestedDistanceMillimeter == 0) {
         stop(DefaultStopMode); // In case motor was running
         return;
@@ -232,8 +235,8 @@ void setSpeedPWM(uint8_t aRequestedSpeedPWM) {
          * Write to hardware
          */
 #if defined(SERIAL_DEBUG)        
-        Serial.printf("PWM setado: %d\n", aRequestedSpeedPWM);
-        Serial.printf("PWM compensado: %d\n", tCompensatedSpeedPWM);
+        // Serial.printf("PWM setado: %d\n", aRequestedSpeedPWM);
+        // Serial.printf("PWM compensado: %d\n", tCompensatedSpeedPWM);
 #endif
         ledcWrite(MOTOR_PWMA_CHANNEL, aRequestedSpeedPWM);
         ledcWrite(MOTOR_PWMB_CHANNEL, tCompensatedSpeedPWM);
@@ -327,6 +330,9 @@ bool updateMotor() {
       * Stop now
       */
       stop(STOP_MODE_BRAKE); // this sets MOTOR_STATE_STOPPED;
+#if defined(SERIAL_DEBUG)        
+        Serial.printf("Brake at: %d, %d pulses\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT), EncoderCount);
+#endif
       return false; // need no more calls to updateMotor()
     }
   }

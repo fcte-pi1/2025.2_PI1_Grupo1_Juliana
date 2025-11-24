@@ -49,8 +49,8 @@
 #define MAX_SPEED_PWM                        255L // Long constant, otherwise we get "integer overflow in expression"
 
 
-#define DEFAULT_CIRCUMFERENCE_MILLIMETER     227
-#define FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT  ((DEFAULT_CIRCUMFERENCE_MILLIMETER + (ENCODER_COUNTS_PER_FULL_ROTATION / 2)) / ENCODER_COUNTS_PER_FULL_ROTATION) // = 11
+#define DEFAULT_CIRCUMFERENCE_MILLIMETER     213
+#define FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT  (5)//((DEFAULT_CIRCUMFERENCE_MILLIMETER) / ENCODER_COUNTS_PER_FULL_ROTATION) 
 
 /*
  * The millis per tick have the unit [ms]/ (circumference[cm]/countsPerCircumference) -> ms/cm

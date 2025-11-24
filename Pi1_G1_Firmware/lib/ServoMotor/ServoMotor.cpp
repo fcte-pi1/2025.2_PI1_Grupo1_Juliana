@@ -27,13 +27,11 @@ void MovimentaServo(int anguloFinal, unsigned long tempo) {
     servoTempoDuracao = tempo;
     servoTempoInicio = tempoAtual;
     servoEmMovimento = true;
-
     servoMotor.write(servoAnguloDestino); // gira para a posição final
-  }
-
-  // Se o tempo já passou, retorna à posição inicial
-  else if (servoEmMovimento && (tempoAtual - servoTempoInicio >= servoTempoDuracao)) {
+    while ((millis() - servoTempoInicio) < servoTempoDuracao){
+    }
     servoMotor.write(servoAnguloInicial); // volta para o início
     servoEmMovimento = false;             // libera para próxima chamada
+
   }
 }
