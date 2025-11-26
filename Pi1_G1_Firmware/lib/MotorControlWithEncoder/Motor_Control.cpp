@@ -43,7 +43,7 @@ bool CheckStopConditionInUpdateMotor;
     * Currently SpeedPWMCompensation is in steps of 2 and only one motor can have a positive value, the other is set to zero.
     * Value is computed in EncoderMotor::synchronizeMotor()
     */
-uint8_t SpeedPWMCompensation = 13    ;   // Positive value to be subtracted from TargetPWM
+uint8_t SpeedPWMCompensation = 5    ;   // Positive value to be subtracted from TargetPWM
 
 /*
     * Distance optocoupler impulse counter. It is reset at startGoDistanceCount if motor was stopped.
@@ -51,6 +51,8 @@ uint8_t SpeedPWMCompensation = 13    ;   // Positive value to be subtracted from
     */
 volatile unsigned int EncoderCount; // 11 mm for a 220 mm Wheel and 20 encoder slots reset at startGoDistanceMillimeter
 volatile unsigned int EncoderCountForSynchronize; // count used and modified by function
+volatile unsigned int EncoderCountL; // 11 mm for a 220 mm Wheel and 20 encoder slots reset at startGoDistanceMillimeter
+volatile unsigned int EncoderCountForSynchronizeL; // count used and modified by function
 
 
 volatile static bool SensorValuesHaveChanged; // true if encoder data or IMU data have changed
@@ -67,6 +69,10 @@ volatile unsigned long EncoderInterruptDeltaMillis; // Used to get speed
 
 // Do not move it!!! It must be the last element in structure and is required for stopMotorAndReset()
 volatile unsigned long LastEncoderInterruptMillis; // used internal for debouncing and lock/timeout detection
+volatile unsigned long EncoderInterruptDeltaMillisL; // Used to get speed
+
+// Do not move it!!! It must be the last element in structure and is required for stopMotorAndReset()
+volatile unsigned long LastEncoderInterruptMillisL; // used internal for debouncing and lock/timeout detection
 
 void resetSpeedValues(); 
 unsigned int getSpeed();
@@ -106,10 +112,46 @@ void IRAM_ATTR handleEncoderInterrupt() {
         SensorValuesHaveChanged = true;
     }
 }
+void IRAM_ATTR handleEncoderInterruptL() {
+    long tMillis = millis();
+    unsigned long tDeltaMillis = tMillis - LastEncoderInterruptMillisL;
+    if (tDeltaMillis <= ENCODER_SENSOR_RING_MILLIS) {
+        // assume signal is ringing and do nothing
+    } else {
+        LastEncoderInterruptMillisL = tMillis;
+        if (tDeltaMillis < ENCODER_SENSOR_TIMEOUT_MILLIS) {
+            EncoderInterruptDeltaMillisL = tDeltaMillis;
+        } else {
+            // timeout
+            EncoderInterruptDeltaMillisL = 0;
+        }
+
+        EncoderCountL++;
+        EncoderCountForSynchronizeL++;
+    }
+}
+
+void MotorInit(){
+  pinMode(PWMA_R, OUTPUT);
+  pinMode(AIN2_R, OUTPUT);
+  pinMode(AIN1_R, OUTPUT);
+  pinMode(STBY, OUTPUT);
+  pinMode(BIN2_L, OUTPUT);
+  pinMode(BIN1_L, OUTPUT);
+  pinMode(PWMB_L, OUTPUT);
+
+  ledcSetup(MOTOR_PWMA_CHANNEL, MOTOR_PWM_FREQUENCY, MOTOR_PWM_RESOLUTION);
+  ledcSetup(MOTOR_PWMB_CHANNEL, MOTOR_PWM_FREQUENCY, MOTOR_PWM_RESOLUTION);
+
+  ledcAttachPin(PWMA_R, MOTOR_PWMA_CHANNEL);
+  ledcAttachPin(PWMB_L, MOTOR_PWMB_CHANNEL);
+}
 
 void encoderInit (){
   pinMode(ENC1_R, INPUT);
   attachInterrupt(digitalPinToInterrupt(ENC1_R), handleEncoderInterrupt, RISING);
+  pinMode(ENC2_L, INPUT);
+  attachInterrupt(digitalPinToInterrupt(ENC2_L), handleEncoderInterruptL, RISING);
 }
 /*
  * If motor is already running, adjust TargetDistanceMillimeter to go to aRequestedDistanceMillimeter
@@ -117,7 +159,7 @@ void encoderInit (){
 void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int aRequestedDistanceMillimeter,
         uint8_t aRequestedDirection) {
 #if defined(SERIAL_DEBUG)        
-        Serial.printf("Distance ratio: %d\n", FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT);
+        Serial.printf("Distance ratio: %f\n", FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT);
 #endif
     if (aRequestedDistanceMillimeter == 0) {
         stop(DefaultStopMode); // In case motor was running
@@ -331,7 +373,7 @@ bool updateMotor() {
       */
       stop(STOP_MODE_BRAKE); // this sets MOTOR_STATE_STOPPED;
 #if defined(SERIAL_DEBUG)        
-        Serial.printf("Brake at: %d, %d pulses\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT), EncoderCount);
+        Serial.printf("Brake at: %f, %d/%d pulses\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT), EncoderCountL, EncoderCount);
 #endif
       return false; // need no more calls to updateMotor()
     }
@@ -346,7 +388,7 @@ bool updateMotor() {
       tNewSpeedPWM = RAMP_UP_VALUE_OFFSET_SPEED_PWM; // start immediately with speed offset (2.3 volt)
       //  --> RAMP_UP
 #if defined(SERIAL_DEBUG)        
-        Serial.printf("Ramp Up started at: %d\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
+        Serial.printf("Ramp Up started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
 #endif
       MotorRampState = MOTOR_STATE_RAMP_UP;
     } else {
@@ -370,7 +412,7 @@ bool updateMotor() {
                       && getDistanceMillimeter() + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
         //  RequestedDriveSpeedPWM reached switch to --> DRIVE_SPEED_PWM and check immediately for next transition to RAMP_DOWN
 #if defined(SERIAL_DEBUG)        
-        Serial.printf("Drive started at: %d\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
+        Serial.printf("Drive started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
 #endif
         MotorRampState = MOTOR_STATE_DRIVE;
       } else {
@@ -397,7 +439,7 @@ bool updateMotor() {
           }
           //  --> RAMP_DOWN
 #if defined(SERIAL_DEBUG)        
-        Serial.printf("Ramp Down started at: %d\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
+        Serial.printf("Ramp Down started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
 #endif
           MotorRampState = MOTOR_STATE_RAMP_DOWN;
       }
@@ -441,7 +483,7 @@ bool updateMotor() {
   return (RequestedSpeedPWM > 0); // current speed == 0
 }
 
-unsigned int getDistanceMillimeter() {
+float getDistanceMillimeter() {
     return EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT; // * 11
 }
 

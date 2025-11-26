@@ -2,8 +2,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-#define MQTT_HOST   "test.mosquitto.org"
-#define MQTT_PORT   1883
+#define MQTT_HOST   "20.49.38.223"
+#define MQTT_PORT   443
 
 static WiFiClient    s_net;
 static PubSubClient  s_mqtt(s_net);

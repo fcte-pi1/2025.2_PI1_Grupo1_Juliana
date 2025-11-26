@@ -10,8 +10,8 @@
 // Tempo em milissegundos para girar 90 graus.
 #define TURN_90_DEGREES_MS 1000 
 
-#define WIFI_SSID     "Wokwi-GUEST"
-#define WIFI_PASSWORD ""
+#define WIFI_SSID     "S24+ de Guilherme"
+#define WIFI_PASSWORD "guinutolindo"
 #define WIFI_CHANNEL  6
 
 // Fila de Comandos 
@@ -28,8 +28,9 @@ const float V_nominal = 6.0;
 const float Capacidade_Ah = 2.7;
 float EnergiaTotal;
 float EnergiaConsumida = 0;
-unsigned long ultimoTempo;
+unsigned long ultimaMedicao;
 volatile bool inaUpdateFlag = false;
+int flag = 0;
 
 void IRAM_ATTR InaTmrISR(){
   inaUpdateFlag = true;
@@ -47,19 +48,7 @@ void setup() {
   encoderInit ();
 
   //Motors & H Bridge Setup
-  pinMode(PWMA_R, OUTPUT);
-  pinMode(AIN2_R, OUTPUT);
-  pinMode(AIN1_R, OUTPUT);
-  pinMode(STBY, OUTPUT);
-  pinMode(BIN2_L, OUTPUT);
-  pinMode(BIN1_L, OUTPUT);
-  pinMode(PWMB_L, OUTPUT);
-
-  ledcSetup(MOTOR_PWMA_CHANNEL, MOTOR_PWM_FREQUENCY, MOTOR_PWM_RESOLUTION);
-  ledcSetup(MOTOR_PWMB_CHANNEL, MOTOR_PWM_FREQUENCY, MOTOR_PWM_RESOLUTION);
-
-  ledcAttachPin(PWMA_R, MOTOR_PWMA_CHANNEL);
-  ledcAttachPin(PWMB_L, MOTOR_PWMB_CHANNEL);
+  MotorInit();
   
   // wifi_connect(WIFI_SSID, WIFI_PASSWORD, WIFI_CHANNEL);
 
@@ -74,15 +63,15 @@ void setup() {
   }
 
   EnergiaTotal = V_nominal * Capacidade_Ah * 3600.0;
-  ultimoTempo = millis();
+  ultimaMedicao = millis();
 
-// mqtt_init();
+  mqtt_init();
 
-//* Servo
+  // Servo
 
-ServoSetup(PWM_SERVO, 0); // Servo no pino 18, começa em 0°
-MovimentaServo(90, 5000); // Aqui estamos fazendo o servo girar 90° por 5 segundos
-Serial.println("Servo inicializado!");
+  ServoSetup(PWM_SERVO, 0); // Servo no pino 18, começa em 0°
+  MovimentaServo(90, 5000); // Aqui estamos fazendo o servo girar 90° por 5 segundos
+  Serial.println("Servo inicializado!");
 
 
   
@@ -98,11 +87,15 @@ Serial.println("Servo inicializado!");
   // commandQueue[0] = 'D';  // Direita
   commandQueue[0] = 'F';
   commandCount = 1;
+  my_led_bind_cmd_topic("esp/test");
 }
 
 void loop() {
   handleSerialInput();
-  processLoop();
+  // mqtt_loop();
+  // if (flag == 1){
+    processLoop();
+  // }
 }
 
 void handleSerialInput() {
@@ -129,6 +122,7 @@ void handleSerialInput() {
 
     Serial.printf("%d comandos recebidos e enfileirados.\n", commandCount);
   }
+  
 }
 
 void processLoop() {
@@ -148,8 +142,8 @@ void processLoop() {
             float potencia = ina219.obterPotencia();
             
             unsigned long tempoAtual = millis();
-            float deltaT = (tempoAtual - ultimoTempo) / 1000.0;
-            ultimoTempo = tempoAtual;
+            float deltaT = (tempoAtual - ultimaMedicao) / 1000.0;
+            ultimaMedicao = tempoAtual;
             
             EnergiaConsumida += potencia * deltaT;
             float percentualRestante = ((EnergiaTotal - EnergiaConsumida) / EnergiaTotal) * 100.0;

@@ -15,7 +15,7 @@
 
 
 #define DEFAULT_STOP_MILLIVOLT_MOSFET       700 // Voltage where spinning motors start to stop
-#define DEFAULT_START_MILLIVOLT_MOSFET      3000 // Voltage where motors start to turn
+#define DEFAULT_START_MILLIVOLT_MOSFET      2000 // Voltage where motors start to turn
 #define DEFAULT_DRIVE_MILLIVOLT             4500 // Drive voltage -motors default speed- is 2.0 volt
 
 // Motor directions and stop modes. Are used for parameter aMotorDriverMode and sequence is determined by the Adafruit library API.
@@ -50,7 +50,7 @@
 
 
 #define DEFAULT_CIRCUMFERENCE_MILLIMETER     213
-#define FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT  (5)//((DEFAULT_CIRCUMFERENCE_MILLIMETER) / ENCODER_COUNTS_PER_FULL_ROTATION) 
+#define FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT  (6.4)//((DEFAULT_CIRCUMFERENCE_MILLIMETER) / ENCODER_COUNTS_PER_FULL_ROTATION) 
 
 /*
  * The millis per tick have the unit [ms]/ (circumference[cm]/countsPerCircumference) -> ms/cm
@@ -97,13 +97,14 @@
 
 //-------------------Function prototypes
 
+void MotorInit ();
 void encoderInit ();
 
 void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int aRequestedDistanceMillimeter,
         uint8_t aRequestedDirection);
 
 bool updateMotor();
-unsigned int getDistanceMillimeter();
+float getDistanceMillimeter();
 
 // Funções para giro por tempo (fallback)
 void startTurn(unsigned long duration_ms, int direction);
