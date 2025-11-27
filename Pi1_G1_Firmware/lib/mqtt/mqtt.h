@@ -12,7 +12,22 @@ void mqtt_loop();
 bool mqtt_send_telemetry(const char* topic, const char* jsonPayload);
 
 bool mqtt_send_telemetry_kv(const char* topic, const char* key, const char* value);
-bool mqtt_send_telemetry_kv_num(const char* topic, const char* key, long value);
+
+template <typename T>
+bool mqtt_send_telemetry_kv_num(const char* topic, const char* key, T value) {
+  if (!topic || !key) return false;
+
+  String json;
+  json.reserve(32 + strlen(key) + 16);
+
+  json += "{\"";
+  json += key;
+  json += "\":";
+  json += String(value);
+  json += "}";
+
+  return mqtt_send_telemetry(topic, json.c_str());
+}
 
 WiFiClient&   mqtt_net();
 PubSubClient& mqtt_client();

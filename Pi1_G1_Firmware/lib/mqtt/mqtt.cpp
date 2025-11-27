@@ -1,6 +1,8 @@
 #include "mqtt.h"
 #include <Arduino.h>
 #include <WiFi.h>
+#include <parser.h>
+#include <pin_declaration.h>
 
 #define MQTT_HOST   "20.49.38.223"
 #define MQTT_PORT   443
@@ -23,6 +25,7 @@ static uint8_t       s_subQos[MAX_SUBS];
 static size_t        s_subCount = 0;
 static String  s_cmd_topic;
 
+
 static void resubscribe_all() {
   for (size_t i = 0; i < s_subCount; ++i) {
     if (s_subTopics[i].length() == 0) continue;
@@ -40,16 +43,22 @@ static bool ensure_connected_once() {
   if (!s_host) return false;
   if (s_clientId.isEmpty()) s_clientId = "ESP32-main";
 
+#if defined(SERIAL_DEBUG)
   Serial.print("[MQTT] connecting to "); Serial.print(s_host);
   Serial.print(":"); Serial.print(s_port);
   Serial.print(" as "); Serial.println(s_clientId);
+#endif
 
   if (s_mqtt.connect(s_clientId.c_str())) {
+#if defined(SERIAL_DEBUG)
     Serial.println("[MQTT] connected");
+#endif
     resubscribe_all();
     return true;
   }
+#if defined(SERIAL_DEBUG)
   Serial.print("[MQTT] connect failed, state="); Serial.println(s_mqtt.state());
+#endif
   return false;
 }
 
@@ -63,10 +72,20 @@ static bool publish_impl(const char* topic, const char* payloadJson) {
 
 static void internal_mqtt_cb(char* topic, uint8_t* payload, unsigned int len) {
   if (!s_userCb) return;
+  if (!topic) return;
+  if (!payload || len == 0) return;
 
-  String tmp; tmp.reserve(len + 1);
-  for (unsigned int i = 0; i < len; ++i) tmp += (char)payload[i];
-  s_userCb(topic, tmp.c_str(), len);
+  // Limita tamanho do payload copiado para stack (ajuste se necessário)
+  const size_t MAX_PAYLOAD = 1024;
+  size_t copy_len = (len < (MAX_PAYLOAD - 1)) ? len : (MAX_PAYLOAD - 1);
+
+  // buffer no stack (se copy_len for grande, truncate)
+  char safeBuf[ MAX_PAYLOAD ];
+  for (size_t i = 0; i < copy_len; ++i) safeBuf[i] = (char)payload[i];
+  safeBuf[copy_len] = '\0';
+
+  // chama callback com buffer garantido terminado em '\0'
+  s_userCb(topic, safeBuf, (unsigned int)copy_len);
 }
 
 void mqtt_init() {
@@ -100,12 +119,8 @@ bool mqtt_send_telemetry_kv(const char* topic, const char* key, const char* valu
   return publish_impl(topic, json.c_str());
 }
 
-bool mqtt_send_telemetry_kv_num(const char* topic, const char* key, long value) {
-  if (!topic || !key) return false;
-  String json; json.reserve(32 + strlen(key) + 16);
-  json += "{\""; json += key; json += "\":"; json += value; json += "}";
-  return publish_impl(topic, json.c_str());
-}
+
+
 
 WiFiClient&   mqtt_net()    { return s_net;  }
 PubSubClient& mqtt_client() { return s_mqtt; }
@@ -136,16 +151,25 @@ bool mqtt_subscribe(const char* topic, uint8_t qos) {
   }
 
   bool ok = s_mqtt.subscribe(topic, qos);
+
+#if defined(SERIAL_DEBUG)
   Serial.print("[MQTT] subscribe "); Serial.print(topic);
   Serial.print(" => "); Serial.println(ok ? "OK" : "FAIL");
+#endif
   return ok;
 }
 
 static void led_cmd_handler(const char* topic, const char* payload, unsigned int len) {
   if (s_cmd_topic.length() == 0) return;
   if (!topic || strcmp(topic, s_cmd_topic.c_str()) != 0) return;
-  if (!payload) return;
+  if (!payload || len == 0) return;
+
+  // payload já terminado em '\0' por internal_mqtt_cb
+#if defined(SERIAL_DEBUG)
   Serial.println(payload);
+#endif
+  // chama parser com cópia segura
+  parser((char*)payload);
 }
 
 void my_led_bind_cmd_topic(const char* topic) {

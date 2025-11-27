@@ -23,3 +23,6 @@ static const int MOTOR_PWM_FREQUENCY = 1000;
 static const uint8_t MOTOR_PWM_RESOLUTION = 8;
 static const uint8_t MOTOR_PWMA_CHANNEL = 1;
 static const uint8_t MOTOR_PWMB_CHANNEL = 2;
+
+
+// #define SERIAL_DEBUG

@@ -2,8 +2,10 @@
 #include "Motor_Control.h"
 #include <pin_declaration.h>
 #include <Wire.h>
+#include "parser.h"
+#include <mqtt.h>
 
-#define SERIAL_DEBUG
+
 
 // Variáveis para giro por tempo (fallback)
 static bool turnActive = false;
@@ -43,7 +45,7 @@ bool CheckStopConditionInUpdateMotor;
     * Currently SpeedPWMCompensation is in steps of 2 and only one motor can have a positive value, the other is set to zero.
     * Value is computed in EncoderMotor::synchronizeMotor()
     */
-uint8_t SpeedPWMCompensation = 5    ;   // Positive value to be subtracted from TargetPWM
+uint8_t SpeedPWMCompensation = 0    ;   // Positive value to be subtracted from TargetPWM
 
 /*
     * Distance optocoupler impulse counter. It is reset at startGoDistanceCount if motor was stopped.
@@ -182,6 +184,7 @@ void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int
 
 void resetEncoderControlValues() {
   EncoderCount = 0;
+  EncoderCountL = 0;
   EncoderCountForSynchronize = 0;
   LastEncoderInterruptMillis = millis() - ENCODER_SENSOR_RING_MILLIS - 1; // Set to a sensible value to avoid initial timeout
 }
@@ -372,7 +375,10 @@ bool updateMotor() {
       * Stop now
       */
       stop(STOP_MODE_BRAKE); // this sets MOTOR_STATE_STOPPED;
-#if defined(SERIAL_DEBUG)        
+        mqtt_send_telemetry_kv_num("esp/debug", "pulse_R", EncoderCount);
+        mqtt_send_telemetry_kv_num("esp/debug", "pulse_L", EncoderCountL);  
+        mqtt_send_telemetry_kv_num("esp/debug", "distancia_mm", getDistanceMillimeter());  
+#if defined(SERIAL_DEBUG)      
         Serial.printf("Brake at: %f, %d/%d pulses\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT), EncoderCountL, EncoderCount);
 #endif
       return false; // need no more calls to updateMotor()

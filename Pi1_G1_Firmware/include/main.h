@@ -1,3 +1,6 @@
+
+
 typedef enum {
-    
-} HIGH_LEVEL_STATE;
+    WAIT_COMMANDS = 0,
+    EXECUTE_COMMAND = 1,
+} HighLevelStates;
