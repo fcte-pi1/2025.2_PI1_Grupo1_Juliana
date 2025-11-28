@@ -148,20 +148,21 @@ void loop() {
       inaUpdateFlag = false;
       unsigned long t0 = micros();
 
+      float corrente_mA = ina219.obterCorrente();
+      float corrente = corrente_mA / 1000.0;
       float tensao = ina219.obterTensao();
-      float corrente = ina219.obterCorrente();
-      float potencia = ina219.obterPotencia();
             
       unsigned long tempoAtual = millis();
       float dt = (tempoAtual - ultimaMedicao) / 1000.0;
       ultimaMedicao = tempoAtual;
 
-      EnergiaConsumida += potencia * dt;
+      float P = tensao * corrente;
+      EnergiaConsumida += P * dt;
 
       if (EnergiaConsumida > EnergiaTotal) EnergiaConsumida = EnergiaTotal;
 
       float EnergiaRestante = EnergiaTotal - EnergiaConsumida;
-      float t_restante = (potencia > 0.001) ? (EnergiaRestante / potencia) : INFINITY;
+      float t_restante = (P > 0.001) ? (EnergiaRestante / P) : INFINITY;
 
       int total_segundos = (int)t_restante;
       int t_h = total_segundos / 3600;
