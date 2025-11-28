@@ -95,10 +95,8 @@ export default function SendTrajectory() {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
-      // Backend expects ExecutionStart: { id_circuito, id_carrinho, tempo_estimado? }
       const payload = {
         id_circuito: selectedId,
-        // default to simulated/local cart id 1 if not selecting carts in UI
         id_carrinho: 1,
       }
 

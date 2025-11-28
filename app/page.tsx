@@ -98,7 +98,7 @@ export default function Dashboard() {
                 <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary/10 mb-3 group-hover:bg-secondary/20 transition-colors">
                   <Navigation2 className="h-6 w-6 text-secondary" />
                 </div>
-                <CardTitle className="text-lg">Enviar Trajetória</CardTitle>
+                <CardTitle className="text-lg">Histórico de Trajetória</CardTitle>
                 <CardDescription>Transmita a trajetória para o carrinho robótico</CardDescription>
               </CardHeader>
             </Card>

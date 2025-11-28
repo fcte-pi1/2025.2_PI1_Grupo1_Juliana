@@ -1,8 +1,8 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
+import mqtt from "mqtt" // MODIFICADO: Importar MQTT
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -19,9 +19,11 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
+  RotateCcw, 
 } from "lucide-react"
 import Link from "next/link"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select" // MODIFICADO: Para selecionar Lado
 
 type CommandType = "move" | "rotate" | "release"
 type SendStatus = "idle" | "sending" | "success" | "error"
@@ -29,7 +31,7 @@ type SendStatus = "idle" | "sending" | "success" | "error"
 interface Command {
   id: string
   type: CommandType
-  value: number
+  value: number // Para rotação: 90 = direita, -90 = esquerda
   unit: string
 }
 
@@ -48,7 +50,7 @@ const commandTemplates: CommandTemplate[] = [
     label: "Andar",
     icon: <MoveVertical className="h-5 w-5" />,
     color: "bg-blue-500",
-    defaultValue: 100,
+    defaultValue: 20,
     unit: "cm",
   },
   {
@@ -56,7 +58,7 @@ const commandTemplates: CommandTemplate[] = [
     label: "Girar",
     icon: <RotateCw className="h-5 w-5" />,
     color: "bg-green-500",
-    defaultValue: 90,
+    defaultValue: 90, // Vamos usar 90 para direita, -90 para esquerda internamente
     unit: "°",
   },
   {
@@ -64,7 +66,7 @@ const commandTemplates: CommandTemplate[] = [
     label: "Liberar Carga",
     icon: <Package className="h-5 w-5" />,
     color: "bg-orange-500",
-    defaultValue: 0,
+    defaultValue: 1,
     unit: "",
   },
 ]
@@ -88,7 +90,6 @@ export default function CreateTrajectory() {
 
   const handleDrop = (targetIndex?: number) => {
     if (draggedTemplate) {
-      // Adding new command from palette
       const newCommand: Command = {
         id: Date.now().toString(),
         type: draggedTemplate.type,
@@ -104,7 +105,6 @@ export default function CreateTrajectory() {
         setCommands([...commands, newCommand])
       }
     } else if (draggedCommandId) {
-      // Reordering existing command
       const draggedIndex = commands.findIndex((cmd) => cmd.id === draggedCommandId)
       if (draggedIndex !== -1 && targetIndex !== undefined && draggedIndex !== targetIndex) {
         const newCommands = [...commands]
@@ -140,46 +140,35 @@ export default function CreateTrajectory() {
   const handleSend = async () => {
     setSendStatus("sending");
 
-    if (!trajectoryName || commands.length === 0) {
-      console.error("Nome ou comandos faltando");
+    if (commands.length === 0) {
       setSendStatus("error");
       return;
     }
 
-    // Backend expects { nome: string, trechos: [{ comando, parametro, ordem }] }
-    const payloadTrechos = commands.map(({ type, value }, index) => ({
-      comando: type, // 'move' | 'rotate' | 'release'
-      parametro: value,
-      ordem: index,
-    }));
+    const formattedCommands = commands.map((cmd) => {
+      if (cmd.type === "move") return { "andar": cmd.value };
+      if (cmd.type === "rotate") return { "virar": cmd.value > 0 ? "direita" : "esquerda" };
+      if (cmd.type === "release") return { "lib_carga": "1" };
+      return {};
+    });
 
-    const payload = {
-      nome: trajectoryName,
-      trechos: payloadTrechos,
-    };
+    const payload = { comandos: formattedCommands };
 
     try {
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-          if (!apiUrl) {
-            throw new Error("API URL não está configurada");
-          }
-
-          const response = await fetch(`${apiUrl}/circuitos/`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
+      const response = await fetch('/api/send-trajectory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
       if (response.ok) {
-        const result = await response.json();
-        console.log("Trajetória salva com sucesso:", result);
+        console.log("Sucesso via API!");
         setSendStatus("success");
       } else {
-        console.error("Falha ao salvar trajetória:", response.statusText);
+        console.error("Erro na API");
         setSendStatus("error");
       }
+
     } catch (error) {
       console.error("Erro de rede:", error);
       setSendStatus("error");
@@ -195,7 +184,6 @@ export default function CreateTrajectory() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center gap-4">
@@ -206,7 +194,7 @@ export default function CreateTrajectory() {
             </Link>
             <div>
               <h1 className="text-xl font-bold text-foreground">Criar e Enviar Trajetória</h1>
-              <p className="text-sm text-muted-foreground">Arraste comandos para construir a sequência</p>
+              <p className="text-sm text-muted-foreground">MQTT Controller</p>
             </div>
           </div>
         </div>
@@ -214,12 +202,12 @@ export default function CreateTrajectory() {
 
       <main className="container mx-auto px-6 py-8">
         <div className="flex gap-6 max-w-7xl mx-auto">
-          {/* Left Sidebar - Command Library */}
+          {/* Left Sidebar */}
           <aside className="w-80 flex-shrink-0">
             <Card className="sticky top-6">
               <CardHeader>
-                <CardTitle>Biblioteca de Comandos</CardTitle>
-                <CardDescription>Arraste para a área de construção</CardDescription>
+                <CardTitle>Biblioteca</CardTitle>
+                <CardDescription>Arraste os comandos</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {commandTemplates.map((template) => (
@@ -230,17 +218,12 @@ export default function CreateTrajectory() {
                     className="cursor-grab active:cursor-grabbing"
                   >
                     <div
-                      className={`${template.color} text-white rounded-xl p-4 shadow-lg hover:shadow-xl transition-all hover:scale-105 hover:-translate-y-1`}
+                      className={`${template.color} text-white rounded-xl p-4 shadow-lg hover:shadow-xl transition-all hover:scale-105`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="bg-white/20 rounded-lg p-2">{template.icon}</div>
                         <div className="flex-1">
                           <div className="font-semibold">{template.label}</div>
-                          {template.unit && (
-                            <div className="text-xs opacity-90 mt-0.5">
-                              Padrão: {template.defaultValue} {template.unit}
-                            </div>
-                          )}
                         </div>
                       </div>
                     </div>
@@ -250,32 +233,13 @@ export default function CreateTrajectory() {
             </Card>
           </aside>
 
-          {/* Main Content - Building Area */}
+          {/* Main Content */}
           <div className="flex-1 space-y-6">
-            {/* Trajectory Name */}
-            <Card>
-              <CardContent className="pt-6">
-                <div className="space-y-2">
-                  <Label htmlFor="trajectory-name">Nome da Trajetória</Label>
-                  <Input
-                    id="trajectory-name"
-                    placeholder="Ex: Rota de Entrega A"
-                    value={trajectoryName}
-                    onChange={(e) => setTrajectoryName(e.target.value)}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Sequence Builder */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Sequência de Comandos</CardTitle>
-                    <CardDescription>
-                      {commands.length} comando{commands.length !== 1 ? "s" : ""} na sequência
-                    </CardDescription>
                   </div>
                 </div>
               </CardHeader>
@@ -291,19 +255,12 @@ export default function CreateTrajectory() {
                 >
                   {commands.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full py-20 text-center">
-                      <div className="rounded-full bg-muted p-8 mb-4">
-                        <MoveVertical className="h-12 w-12 text-muted-foreground" />
-                      </div>
                       <p className="text-base font-medium text-foreground">Arraste comandos aqui</p>
-                      <p className="text-sm text-muted-foreground mt-2">
-                        Comece arrastando um comando da biblioteca ao lado
-                      </p>
                     </div>
                   ) : (
                     <div className="space-y-0">
                       {commands.map((command, index) => (
                         <div key={command.id} className="relative">
-                          {/* Drop zone indicator */}
                           <div
                             className={`h-3 transition-all ${
                               dragOverIndex === index ? "bg-primary/20 rounded mb-2" : ""
@@ -312,26 +269,27 @@ export default function CreateTrajectory() {
                             onDrop={() => handleDrop(index)}
                           />
 
-                          {/* Command Card */}
                           <div
                             draggable
                             onDragStart={() => handleCommandDragStart(command.id)}
                             className="cursor-grab active:cursor-grabbing relative"
                           >
                             <div
-                              className={`${getCommandColor(command.type)} text-white rounded-xl p-5 shadow-lg hover:shadow-xl transition-all relative`}
+                              className={`${getCommandColor(command.type)} text-white rounded-xl p-5 shadow-lg relative`}
                             >
                               <div className="flex items-center gap-4">
                                 <GripVertical className="h-5 w-5 opacity-50 flex-shrink-0" />
-                                <Badge
-                                  variant="secondary"
-                                  className="font-mono bg-white/20 text-white border-0 text-sm px-3"
-                                >
+                                <Badge variant="secondary" className="font-mono bg-white/20 text-white border-0 text-sm px-3">
                                   {index + 1}
                                 </Badge>
 
                                 <div className="bg-white/20 rounded-lg p-2 flex-shrink-0">
-                                  {commandTemplates.find((t) => t.type === command.type)?.icon}
+                                  {}
+                                  {command.type === 'rotate' ? (
+                                     command.value > 0 ? <RotateCw className="h-5 w-5"/> : <RotateCcw className="h-5 w-5"/>
+                                  ) : (
+                                     commandTemplates.find((t) => t.type === command.type)?.icon
+                                  )}
                                 </div>
 
                                 <div className="flex-1">
@@ -340,18 +298,33 @@ export default function CreateTrajectory() {
                                   </span>
                                 </div>
 
-                                {command.type !== "release" && (
+                                {}
+                                {command.type === "move" && (
                                   <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-2">
                                     <Input
                                       type="number"
                                       value={command.value}
-                                      onChange={(e) =>
-                                        updateCommandValue(command.id, Number.parseFloat(e.target.value))
-                                      }
+                                      onChange={(e) => updateCommandValue(command.id, Number.parseFloat(e.target.value))}
                                       className="w-20 h-9 bg-white/30 border-white/40 text-white placeholder:text-white/50 font-semibold"
-                                      onClick={(e) => e.stopPropagation()}
                                     />
-                                    <span className="text-sm font-semibold">{command.unit}</span>
+                                    <span className="text-sm font-semibold">cm</span>
+                                  </div>
+                                )}
+
+                                {command.type === "rotate" && (
+                                  <div className="flex items-center gap-2 bg-white/20 rounded-lg px-1 py-1">
+                                     <Select 
+                                        value={command.value > 0 ? "direita" : "esquerda"} 
+                                        onValueChange={(val) => updateCommandValue(command.id, val === "direita" ? 90 : -90)}
+                                     >
+                                      <SelectTrigger className="w-[110px] h-9 bg-white/30 border-white/40 text-white font-semibold">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="direita">Direita</SelectItem>
+                                        <SelectItem value="esquerda">Esquerda</SelectItem>
+                                      </SelectContent>
+                                    </Select>
                                   </div>
                                 )}
 
@@ -369,17 +342,9 @@ export default function CreateTrajectory() {
                               </div>
                             </div>
                           </div>
-
-                          {index < commands.length - 1 && (
-                            <div className="flex justify-center py-2">
-                              <div className="w-0.5 h-6 bg-border relative">
-                                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-2 h-2 bg-border rounded-full" />
-                              </div>
-                            </div>
-                          )}
                         </div>
                       ))}
-
+                      
                       {/* Final drop zone */}
                       <div
                         className={`h-3 transition-all ${
@@ -395,99 +360,32 @@ export default function CreateTrajectory() {
             </Card>
 
             {commands.length > 0 && (
-              <>
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Opções de Envio</CardTitle>
-                    <CardDescription>Configure como a trajetória será enviada</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-start space-x-3">
-                      <Checkbox
-                        id="store-memory"
-                        checked={storeInMemory}
-                        onCheckedChange={(checked) => setStoreInMemory(checked as boolean)}
-                      />
-                      <div className="grid gap-1.5 leading-none">
-                        <Label
-                          htmlFor="store-memory"
-                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                        >
-                          Armazenar na memória do carrinho
-                        </Label>
-                        <p className="text-sm text-muted-foreground">
-                          A trajetória será salva na memória local do carrinho para execução offline
-                        </p>
-                      </div>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Enviar</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {sendStatus === "idle" && (
+                    <Button onClick={handleSend} size="lg" className="w-full">
+                      <Send className="mr-2 h-5 w-5" />
+                      Enviar via MQTT
+                    </Button>
+                  )}
+                  {sendStatus === "sending" && <p className="text-center text-muted-foreground">Enviando...</p>}
+                  {sendStatus === "success" && (
+                    <div className="text-center text-green-600 font-bold">
+                       Sucesso! Pacote JSON enviado.
+                       <Button variant="link" onClick={resetStatus}>Novo envio</Button>
                     </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Enviar Trajetória</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {sendStatus === "idle" && (
-                      <div className="text-center py-6">
-                        <div className="rounded-full bg-muted p-4 w-fit mx-auto mb-4">
-                          <Send className="h-8 w-8 text-muted-foreground" />
-                        </div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Pronto para enviar {commands.length} comando{commands.length !== 1 ? "s" : ""}
-                        </p>
-                        <Button onClick={handleSend} size="lg" className="w-full">
-                          <Send className="mr-2 h-5 w-5" />
-                          Enviar Sequência Completa
-                        </Button>
-                      </div>
-                    )}
-
-                    {sendStatus === "sending" && (
-                      <div className="text-center py-8">
-                        <div className="rounded-full bg-primary/10 p-4 w-fit mx-auto mb-4">
-                          <Loader2 className="h-8 w-8 text-primary animate-spin" />
-                        </div>
-                        <p className="text-sm font-medium text-foreground mb-1">Enviando trajetória...</p>
-                        <p className="text-xs text-muted-foreground">Transmitindo {commands.length} comandos</p>
-                      </div>
-                    )}
-
-                    {sendStatus === "success" && (
-                      <div className="text-center py-8">
-                        <div className="rounded-full bg-green-500/10 p-4 w-fit mx-auto mb-4">
-                          <CheckCircle2 className="h-8 w-8 text-green-500" />
-                        </div>
-                        <p className="text-sm font-medium text-foreground mb-1">Trajetória enviada com sucesso!</p>
-                        <p className="text-xs text-muted-foreground">
-                          O carrinho está pronto para executar a sequência
-                        </p>
-                        <div className="flex gap-2 justify-center mt-4">
-                          <Link href="/telemetry">
-                            <Button size="sm">Ver Telemetria</Button>
-                          </Link>
-                          <Button size="sm" variant="outline" onClick={resetStatus}>
-                            Criar Nova Trajetória
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-
-                    {sendStatus === "error" && (
-                      <div className="text-center py-8">
-                        <div className="rounded-full bg-destructive/10 p-4 w-fit mx-auto mb-4">
-                          <AlertCircle className="h-8 w-8 text-destructive" />
-                        </div>
-                        <p className="text-sm font-medium text-foreground mb-1">Erro ao enviar trajetória</p>
-                        <p className="text-xs text-muted-foreground">Verifique a conexão e tente novamente</p>
-                        <Button size="sm" variant="outline" onClick={resetStatus} className="mt-4 bg-transparent">
-                          Tentar Novamente
-                        </Button>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </>
+                  )}
+                  {sendStatus === "error" && (
+                    <div className="text-center text-red-500 font-bold">
+                       Erro ao conectar ou enviar. Verifique o console.
+                       <Button variant="link" onClick={resetStatus}>Tentar novamente</Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             )}
           </div>
         </div>
