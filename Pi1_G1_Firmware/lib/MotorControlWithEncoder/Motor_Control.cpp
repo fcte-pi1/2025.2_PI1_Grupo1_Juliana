@@ -5,6 +5,8 @@
 #include "parser.h"
 #include <mqtt.h>
 
+#define DIREITA false
+#define ESQUERDA true
 
 
 // Variáveis para giro por tempo (fallback)
@@ -45,7 +47,18 @@ bool CheckStopConditionInUpdateMotor;
     * Currently SpeedPWMCompensation is in steps of 2 and only one motor can have a positive value, the other is set to zero.
     * Value is computed in EncoderMotor::synchronizeMotor()
     */
-uint8_t SpeedPWMCompensation = 0    ;   // Positive value to be subtracted from TargetPWM
+int32_t SpeedPWMCompensation = 0;          // correção atual
+const int16_t PWM_CORRECTION_MAX = 40;   // limite de correção (ajuste fino)
+bool directionCompensationFlag = ESQUERDA; // indica qual motor recebe a compensação
+
+// --- Variáveis estáticas do PID ---
+static float pidIntegral = 0;
+static int32_t pidLastError = 0;
+
+// --- Ganhos do PID (ajuste depois) ---
+float Kp_sync = 5.0; 
+float Ki_sync = 0.15;  
+float Kd_sync = 0.7;   
 
 /*
     * Distance optocoupler impulse counter. It is reset at startGoDistanceCount if motor was stopped.
@@ -90,6 +103,7 @@ void setSpeedPWMAndDirection(uint8_t aRequestedSpeedPWM, uint8_t aRequestedDirec
 void setSpeedPWMAndDirectionWithRamp(uint8_t aRequestedSpeedPWM, uint8_t aRequestedDirection) ;
 void resetEncoderControlValues();
 void setMotorDifferential(int pwm_r, int pwm_l);
+int32_t updatePWMSynchronization();
 
 
 //=======================================================================
@@ -131,6 +145,43 @@ void IRAM_ATTR handleEncoderInterruptL() {
         EncoderCountL++;
         EncoderCountForSynchronizeL++;
     }
+}
+
+int32_t updatePWMSynchronization() {
+    // diferença entre as rodas
+    int32_t error = (int32_t)EncoderCount - (int32_t)EncoderCountL;
+    int32_t absError = error;
+     
+    if(error >= 0) {
+        directionCompensationFlag = DIREITA; // roda direita mais rapida
+    } else if (error < 0) {
+        directionCompensationFlag = ESQUERDA; // roda esquerda mais rapida
+        absError = -error; // valor absoluto
+    }
+
+    // ===== PID =====
+    // Proporcional
+    float P = Kp_sync * error;
+
+    // Integral
+    pidIntegral += error;
+    if (pidIntegral > 1000) pidIntegral = 1000;
+    if (pidIntegral < -1000) pidIntegral = -1000;
+
+    float I = Ki_sync * pidIntegral;
+
+    // Derivada
+    float D = Kd_sync * (error - pidLastError);
+    pidLastError = error;
+
+    // Correção final
+    float pidOutput = P + I + D;
+    // controle proporcional
+    SpeedPWMCompensation = (int32_t)fabs(pidOutput);
+
+    // limitar correção
+    if (SpeedPWMCompensation > PWM_CORRECTION_MAX) SpeedPWMCompensation = PWM_CORRECTION_MAX;
+    return absError;
 }
 
 void MotorInit(){
@@ -260,32 +311,41 @@ bool checkAndHandleDirectionChange(uint8_t aRequestedDirection) {
  */
 void setSpeedPWM(uint8_t aRequestedSpeedPWM) {
     RequestedSpeedPWM = aRequestedSpeedPWM;
+
     if (aRequestedSpeedPWM == 0) {
         stop(STOP_MODE_KEEP);
         return;
     }
+
+    uint8_t rightPwm = RequestedSpeedPWM;
+    uint8_t leftPwm  = RequestedSpeedPWM;
+
     /*
-     * Handle speed compensation
+     * Handle PID compensation
      */
-    uint8_t tCompensatedSpeedPWM;
-    if (aRequestedSpeedPWM > SpeedPWMCompensation) {
-        tCompensatedSpeedPWM = aRequestedSpeedPWM - SpeedPWMCompensation; // The only statement which sets CurrentCompensatedSpeedPWM to a value != 0
+    if (directionCompensationFlag == DIREITA) {
+        // direita mais rápida → reduz direita
+        if (SpeedPWMCompensation > rightPwm) SpeedPWMCompensation = rightPwm;
+        rightPwm -= SpeedPWMCompensation;
+        CurrentCompensatedSpeedPWM = rightPwm;
     } else {
-        tCompensatedSpeedPWM = 0; // no stop mode here
+        // esquerda mais rápida → reduz esquerda
+        if (SpeedPWMCompensation > leftPwm) SpeedPWMCompensation = leftPwm;
+        leftPwm -= SpeedPWMCompensation;
+        CurrentCompensatedSpeedPWM = leftPwm;
     }
-    if (CurrentCompensatedSpeedPWM != tCompensatedSpeedPWM) {
-        CurrentCompensatedSpeedPWM = tCompensatedSpeedPWM;
-        MotorPWMHasChanged = true;
-        /*
-         * Write to hardware
-         */
-#if defined(SERIAL_DEBUG)        
-        // Serial.printf("PWM setado: %d\n", aRequestedSpeedPWM);
-        // Serial.printf("PWM compensado: %d\n", tCompensatedSpeedPWM);
+
+#if defined(SERIAL_DEBUG)
+    // Serial.printf("PWM direita: %d\n", rightPwm);
+    // Serial.printf("PWM esquerda: %d\n", leftPwm);
 #endif
-        ledcWrite(MOTOR_PWMA_CHANNEL, aRequestedSpeedPWM);
-        ledcWrite(MOTOR_PWMB_CHANNEL, tCompensatedSpeedPWM);
-    }
+
+    mqtt_send_telemetry_kv_num("esp/debug", "error", int(EncoderCount - EncoderCountL)); 
+    mqtt_send_telemetry_kv_num("esp/debug", "rightPwm", rightPwm); 
+    mqtt_send_telemetry_kv_num("esp/debug", "leftPwm", leftPwm); 
+
+    ledcWrite(MOTOR_PWMA_CHANNEL, rightPwm);
+    ledcWrite(MOTOR_PWMB_CHANNEL, leftPwm);
 }
 
 /*
@@ -364,6 +424,8 @@ bool updateMotor() {
   unsigned long tMillis = millis();
   uint8_t tNewSpeedPWM = RequestedSpeedPWM;
 
+  int32_t error = updatePWMSynchronization();
+
   /*
   * Check if target distance is reached or encoder tick has timeout
   */
@@ -437,7 +499,7 @@ bool updateMotor() {
       /*
         * Wait until target distance - braking distance reached
         */
-      if (CheckStopConditionInUpdateMotor && (getDistanceMillimeter() + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
+        if (CheckStopConditionInUpdateMotor && (getDistanceMillimeter() + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
           if (RequestedSpeedPWM > RAMP_DOWN_VALUE_OFFSET_SPEED_PWM) {
               tNewSpeedPWM -= (RAMP_DOWN_VALUE_OFFSET_SPEED_PWM - RAMP_DOWN_VALUE_DELTA); // RAMP_VALUE_DELTA is immediately subtracted below
           } else {
@@ -448,7 +510,12 @@ bool updateMotor() {
         Serial.printf("Ramp Down started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
 #endif
           MotorRampState = MOTOR_STATE_RAMP_DOWN;
-      }
+        }
+        if(error > 0){
+            setSpeedPWM(tNewSpeedPWM); // update speed to apply synchronization correction
+            return true;
+        }
+
   }
 
   // do not use "else if" since we must immediately check for next transition to STOPPED
@@ -693,20 +760,20 @@ void setMotorDifferential(int pwm_r, int pwm_l) {
 // Funções auxiliares ===============================================================================
 
 // Faz o robô andar X metros (valores positivos = frente, negativos = ré)
-void moveMeters(float meters) {
-    if (meters == 0) {
+void moveMillimeters(float millimeters) {
+    if (millimeters == 0) {
         stop(DEFAULT_STOP_MODE);
         return;
     }
     
-    unsigned int mm = abs(meters * 1000);
-    uint8_t direction = (meters > 0) ? DIRECTION_FORWARD : DIRECTION_BACKWARD;
+    unsigned int mm = abs(millimeters);
+    uint8_t direction = (millimeters > 0) ? DIRECTION_FORWARD : DIRECTION_BACKWARD;
     uint8_t speed = 200; // Velocidade (ajustável)
     
     startGoDistanceMillimeterWithSpeed(speed, mm, direction);
     
-    Serial.printf("Iniciando movimento: %.2f metros (%d mm) na direção %s\n", 
-                  abs(meters), mm, (direction == DIRECTION_FORWARD) ? "FRENTE" : "RÉ");
+    Serial.printf("Iniciando movimento: %.2f milímetros (%d mm) na direção %s\n", 
+                  abs(millimeters), mm, (direction == DIRECTION_FORWARD) ? "FRENTE" : "RÉ");
 }
 
 // Faz o robô girar X graus (valores positivos = direita, negativos = esquerda)

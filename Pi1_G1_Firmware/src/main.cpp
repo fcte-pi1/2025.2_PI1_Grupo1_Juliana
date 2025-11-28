@@ -77,6 +77,7 @@ void setup() {
   inaTmr = timerBegin(0,80,true);
   timerAttachInterrupt(inaTmr, &InaTmrISR, true);
   timerAlarmWrite(inaTmr, 5000000, true);
+  digitalWrite(STBY, LOW);
 
   if (!ina219.iniciar()) {
 #if defined(SERIAL_DEBUG)
@@ -97,8 +98,7 @@ void setup() {
   // Serial.println("Servo inicializado!");
 
 
-  
-  digitalWrite(STBY, HIGH);
+
   
   
   // Teste para boot, comente para não executar automaticamente
@@ -124,6 +124,7 @@ void loop() {
     mqtt_loop();
     if (getFlagStop()) {
       highLevelState = EXECUTE_COMMAND;
+      digitalWrite(STBY, HIGH);
 #if defined(SERIAL_DEBUG)
       Serial.println("Troca para EXECUTE_COMMAND");
 #endif
@@ -133,7 +134,8 @@ void loop() {
     break;
   case EXECUTE_COMMAND:
     if (!getFlagStop()) {
-        highLevelState = WAIT_COMMANDS;
+        highLevelState = WAIT_COMMANDS;  
+        digitalWrite(STBY, LOW);
         Serial.println("Troca para WAIT_COMMANDS");
         break;
     }
@@ -266,7 +268,7 @@ void executeNextCommand() {
 #endif
 
     if (command == 'F') {
-        moveMeters(getCommandDistance(currentCommandIndex));
+        moveMillimeters(getCommandDistance(currentCommandIndex));
         executingCommand = true;
     } 
     else if (command == 'D') {

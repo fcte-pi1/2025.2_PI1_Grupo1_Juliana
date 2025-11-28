@@ -115,5 +115,5 @@ void startTurnWithEncoder(int degrees);
 bool updateTurnWithEncoder();
 
 // Funções auxiliares pra andar e girar
-void moveMeters(float meters);
+void moveMillimeters(float millimeters);
 void turnDegrees(int degrees);
