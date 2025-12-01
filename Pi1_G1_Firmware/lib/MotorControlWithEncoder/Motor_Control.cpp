@@ -18,6 +18,7 @@ static unsigned long turnDuration = 0;
 static bool turnWithEncoderActive = false;
 static unsigned int turnTargetEncoderCount = 0;
 static unsigned int turnStartEncoderCount = 0;
+static unsigned int turnStartEncoderCountL = 0;
 static int turnDirectionEncoder = 0;
 
 uint8_t DefaultStopMode;        // used for PWM == 0 and STOP_MODE_KEEP
@@ -48,21 +49,23 @@ bool CheckStopConditionInUpdateMotor;
     * Value is computed in EncoderMotor::synchronizeMotor()
     */
 int32_t SpeedPWMCompensation = 0;          // correção atual
+const int16_t PWM_CORRECTION_MAX = 40;   // limite de correção (ajuste fino)
 bool directionCompensationFlag = ESQUERDA; // indica qual motor recebe a compensação
 
-// --- parâmetros PID (tune depois) ---
-float Kp_sync = 0.5f;
-float Ki_sync = 0.002f;
-float Kd_sync = 0.02f;
-const int PWM_CORRECTION_MAX = 60; // limite absoluto
-const int INTEGRAL_MAX = 10000; // limite anti-windup para acumulo
+const int8_t rightCompensation = 0;
+const int8_t leftCompensation = 13;
 
-// variáveis estáticas do PID (defina fora das funções)
-static long lastEncoderCountR = 0;
-static long lastEncoderCountL = 0;
-static unsigned long lastSyncMillis = 0;
-static float integral_sync = 0.0f;
-static float last_error_sync = 0.0f;
+// --- Variáveis estáticas do PID ---
+static float pidIntegral = 0;
+static float pidDerivative = 0;
+static int32_t pidLastError = 0;
+unsigned long lastPWMSyncMillis = 0;
+const float SAMPLE_MIN_DT = 0.001f; // evita dividir por zero
+
+// --- Ganhos do PID (ajuste depois) ---
+float Kp_sync = 5.2; 
+float Ki_sync = 0.9;  
+float Kd_sync = 0.00;   
 
 /*
     * Distance optocoupler impulse counter. It is reset at startGoDistanceCount if motor was stopped.
@@ -92,6 +95,12 @@ volatile unsigned long EncoderInterruptDeltaMillisL; // Used to get speed
 
 // Do not move it!!! It must be the last element in structure and is required for stopMotorAndReset()
 volatile unsigned long LastEncoderInterruptMillisL; // used internal for debouncing and lock/timeout detection
+
+int32_t SpeedPWMTurnCompensation = 5;          // correção atual
+int pwm_r = 80; // vel de giro (PWM)
+int pwm_l = 80; // vel de giro (PWM)
+bool stoped_r = false;
+bool stoped_l = false;
 
 void resetSpeedValues(); 
 unsigned int getSpeed();
@@ -151,49 +160,48 @@ void IRAM_ATTR handleEncoderInterruptL() {
     }
 }
 
+void resetErrorsPID() {
+    pidIntegral = 0;
+    pidLastError = 0;
+    pidDerivative = 0;
+}
 
-// retorna erro absoluto (pulsos) e atualiza SpeedPWMCompensation e directionCompensationFlag
 int32_t updatePWMSynchronization() {
     unsigned long now = millis();
-    unsigned long dt = (now - lastSyncMillis)/1000;
-    // if (dt_ms == 0) dt_ms = 1; // evitar divisão por zero
-    lastSyncMillis = now;
-    // erro de sincronização
-    float error = EncoderCount - EncoderCountL;  // >0 se direita mais rápida
+    float dt = (now - lastPWMSyncMillis) / 1000.0f; // segundos
+    if (dt <= 0) return 0;
+    lastPWMSyncMillis = now;
+    // diferença entre as rodas
+    int32_t error = (int32_t)EncoderCount - (int32_t)EncoderCountL;
+    int32_t absError = error;
+     
+    if(error >= 0) {
+        directionCompensationFlag = DIREITA; // roda direita mais rapida
+    } else if (error < 0) {
+        directionCompensationFlag = ESQUERDA; // roda esquerda mais rapida
+        absError = -error; // valor absoluto
+    }
 
-
-
+    // ===== PID =====
     // Proporcional
-    float P = Kp_sync * error;
 
-    // Integral com anti-windup
-    integral_sync += error * dt;
-    if (integral_sync > INTEGRAL_MAX) integral_sync = INTEGRAL_MAX;
-    if (integral_sync < -INTEGRAL_MAX) integral_sync = -INTEGRAL_MAX;
-    float I = Ki_sync * integral_sync;
+    // Integral
+    pidIntegral += error * dt;
+    if (pidIntegral > 600) pidIntegral = 600;
+    if (pidIntegral < -600) pidIntegral = -600;
 
-    // Derivativo
-    float derivative = (error - last_error_sync) / dt;
-    float D = Kd_sync * derivative;
-    last_error_sync = error;
+    // Derivada
+    pidDerivative = (error - pidLastError) / dt;
+    pidLastError = error;
 
-    // saída PID
-    float corr = P + I + D;
+    // Correção final
+    float pidOutput = (Kp_sync * error) + (Ki_sync * pidIntegral) + (Kd_sync * pidDerivative);
+    // controle proporcional
+    SpeedPWMCompensation = (int32_t)fabs(pidOutput);
 
-    // limitar correção absoluta
-    if (corr > PWM_CORRECTION_MAX) corr = PWM_CORRECTION_MAX;
-    if (corr < -PWM_CORRECTION_MAX) corr = -PWM_CORRECTION_MAX;
-
-    // salvar em SpeedPWMCompensation (inteiro) e sinal para direçãoCompensationFlag
-    // aqui corr positivo -> direita mais rápida -> devemos DIMINUIR direita (aplicar + para esquerda)
-    SpeedPWMCompensation = (int32_t)(int)round(corr);
-
-    mqtt_send_telemetry_kv_num("esp/debug", "pidP", P);
-    mqtt_send_telemetry_kv_num("esp/debug", "pidI", I);
-    mqtt_send_telemetry_kv_num("esp/debug", "pidD", D);
-    mqtt_send_telemetry_kv_num("esp/debug", "corr", (int)corr);
-
-    return (int32_t)error;
+    // limitar correção
+    if (SpeedPWMCompensation > PWM_CORRECTION_MAX) SpeedPWMCompensation = PWM_CORRECTION_MAX;
+    return absError;
 }
 
 void MotorInit(){
@@ -224,7 +232,7 @@ void encoderInit (){
 void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int aRequestedDistanceMillimeter,
         uint8_t aRequestedDirection) {
 #if defined(SERIAL_DEBUG)        
-        // Serial.printf("Distance ratio: %f\n", FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT);
+        Serial.printf("Distance ratio: %f\n", FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT);
 #endif
     if (aRequestedDistanceMillimeter == 0) {
         stop(DefaultStopMode); // In case motor was running
@@ -317,49 +325,50 @@ bool checkAndHandleDirectionChange(uint8_t aRequestedDirection) {
     return tReturnValue;
 }
 
+/*
+ * Sets active PWM and handles speed compensation and stop of motor
+ *  @param  aRequestedSpeedPWM The 8-bit PWM value, 0 is off, 255 is on forward
+ */
 void setSpeedPWM(uint8_t aRequestedSpeedPWM) {
     RequestedSpeedPWM = aRequestedSpeedPWM;
+
     if (aRequestedSpeedPWM == 0) {
         stop(STOP_MODE_KEEP);
         return;
     }
 
-    // base PWM aplicado a ambos
-    int base = (int)RequestedSpeedPWM;
+    uint8_t rightPwm = RequestedSpeedPWM;
+    uint8_t leftPwm  = RequestedSpeedPWM;
 
-    // aplica a correção calculada (SpeedPWMCompensation) dependendo do sinal (directionCompensationFlag)
-    int rightPwm = base;
-    int leftPwm  = base + SpeedPWMCompensation;
+    /*
+     * Handle PID compensation
+     */
+    if (directionCompensationFlag == DIREITA) {
+        // direita mais rápida → reduz direita
+        // if (SpeedPWMCompensation > rightPwm) SpeedPWMCompensation = rightPwm;
+            rightPwm -= (SpeedPWMCompensation + rightCompensation);
+        CurrentCompensatedSpeedPWM = rightPwm;
+    } else {
+        // esquerda mais rápida → reduz esquerda
+        // if (SpeedPWMCompensation > leftPwm) SpeedPWMCompensation = leftPwm;
+        leftPwm -= (SpeedPWMCompensation + leftCompensation);
+        CurrentCompensatedSpeedPWM = leftPwm;
+    }
 
-    // Aplica correção de forma SIMÉTRICA; usa metade para cada lado para manter média
-    // int corr = SpeedPWMCompensation; // >=0
-    // if (directionCompensationFlag == DIREITA) {
-    //     // direita está mais rápida -> reduzir direita
-    //     rightPwm = base - corr;
-    //     // leftPwm  = base + (corr / 4); // opcional: leve aumento na outra roda para compensar atrito
-    // } else if (directionCompensationFlag == ESQUERDA) {
-    //     leftPwm  = base - corr;
-    //     // rightPwm = base + (corr / 4);
-    // } else {
-    //     // sem correção
-    // }
+#if defined(SERIAL_DEBUG)
+    // Serial.printf("PWM direita: %d\n", rightPwm);
+    // Serial.printf("PWM esquerda: %d\n", leftPwm);
+#endif
 
-    // limites 0..255 (ou 0..maxPWM)
-    if (rightPwm < 0) rightPwm = 0;
-    if (leftPwm < 0) leftPwm = 0;
-    if (rightPwm > 255) rightPwm = 255;
-    if (leftPwm > 255) leftPwm = 255;
+    mqtt_send_telemetry_kv_num("esp/debug", "integral", pidIntegral); 
+    mqtt_send_telemetry_kv_num("esp/debug", "derivative", pidDerivative); 
+    mqtt_send_telemetry_kv_num("esp/debug", "error", int(EncoderCount - EncoderCountL)); 
+    mqtt_send_telemetry_kv_num("esp/debug", "rightPwm", rightPwm); 
+    mqtt_send_telemetry_kv_num("esp/debug", "leftPwm", leftPwm); 
 
-    // debug / telemetria
-    mqtt_send_telemetry_kv_num("esp/debug", "error_total", int(EncoderCount - EncoderCountL));
-    mqtt_send_telemetry_kv_num("esp/debug", "rightPwm", rightPwm);
-    mqtt_send_telemetry_kv_num("esp/debug", "leftPwm", leftPwm);
-
-    // escreve hardware
     ledcWrite(MOTOR_PWMA_CHANNEL, rightPwm);
     ledcWrite(MOTOR_PWMB_CHANNEL, leftPwm);
 }
-
 
 /*
  *  @brief  Control the DC motor driver direction and stop mode
@@ -454,7 +463,7 @@ bool updateMotor() {
         mqtt_send_telemetry_kv_num("esp/debug", "pulse_L", EncoderCountL);  
         mqtt_send_telemetry_kv_num("esp/debug", "distancia_mm", getDistanceMillimeter());  
 #if defined(SERIAL_DEBUG)      
-        // Serial.printf("Brake at: %f, %d/%d pulses\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT), EncoderCountL, EncoderCount);
+        Serial.printf("Brake at: %f, %d/%d pulses\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT), EncoderCountL, EncoderCount);
 #endif
       return false; // need no more calls to updateMotor()
     }
@@ -469,7 +478,7 @@ bool updateMotor() {
       tNewSpeedPWM = RAMP_UP_VALUE_OFFSET_SPEED_PWM; // start immediately with speed offset (2.3 volt)
       //  --> RAMP_UP
 #if defined(SERIAL_DEBUG)        
-        // Serial.printf("Ramp Up started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
+        Serial.printf("Ramp Up started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
 #endif
       MotorRampState = MOTOR_STATE_RAMP_UP;
     } else {
@@ -493,7 +502,7 @@ bool updateMotor() {
                       && getDistanceMillimeter() + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
         //  RequestedDriveSpeedPWM reached switch to --> DRIVE_SPEED_PWM and check immediately for next transition to RAMP_DOWN
 #if defined(SERIAL_DEBUG)        
-        // Serial.printf("Drive started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
+        Serial.printf("Drive started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
 #endif
         MotorRampState = MOTOR_STATE_DRIVE;
       } else {
@@ -520,7 +529,7 @@ bool updateMotor() {
           }
           //  --> RAMP_DOWN
 #if defined(SERIAL_DEBUG)        
-        // Serial.printf("Ramp Down started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
+        Serial.printf("Ramp Down started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
 #endif
           MotorRampState = MOTOR_STATE_RAMP_DOWN;
         }
@@ -570,8 +579,7 @@ bool updateMotor() {
 }
 
 float getDistanceMillimeter() {
-    float avgCounts = ((EncoderCount * FACTOR_COUNT_R) + (EncoderCountL * FACTOR_COUNT_L)) * 0.5f;
-    return avgCounts;
+    return EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT; // * 11
 }
 
 /*
@@ -654,21 +662,28 @@ void startTurnWithEncoder(int degrees) {
     if (degrees == 0) {
         return;
     }
+    resetEncoderControlValues();
+    stoped_r = false;
+    stoped_l = false;
     
     // calcula qtd pulsos p girar
     unsigned int encoder_counts_needed = (abs(degrees) * ENCODER_COUNTS_PER_90_DEGREES) / 90; // ajustavel
     
     turnTargetEncoderCount = encoder_counts_needed;
     turnStartEncoderCount = EncoderCount;
+    turnStartEncoderCountL = EncoderCountL;
     turnDirectionEncoder = (degrees > 0) ? 1 : -1;
     turnWithEncoderActive = true;
     
-    int pwm = 150; // vel de giro (PWM)
+    pwm_r = 120; // vel de giro (PWM)
+    pwm_l = 120; // vel de giro (PWM)
     
     if (turnDirectionEncoder > 0) {
-        setMotorDifferential(-pwm, pwm); // Direita
+        pwm_r = -pwm_r;
+        setMotorDifferential(pwm_r, pwm_l); // Direita
     } else {
-        setMotorDifferential(pwm, -pwm); // Esquerda
+        pwm_l = -pwm_l;
+        setMotorDifferential(pwm_r, pwm_l); // Esquerda
     }
     
     #ifdef SERIAL_DEBUG
@@ -683,8 +698,9 @@ bool updateTurnWithEncoder() {
     }
     
     // quantos pulsos já foram percorridos
-    unsigned int encoder_counts_traveled = EncoderCount - turnStartEncoderCount;
-    unsigned int encoder_counts_remaining = turnTargetEncoderCount - encoder_counts_traveled;
+    unsigned int encoder_counts_traveled_r = EncoderCount - turnStartEncoderCount;
+    unsigned int encoder_counts_traveled_l = EncoderCountL - turnStartEncoderCountL;
+    unsigned int encoder_counts_remaining = turnTargetEncoderCount - encoder_counts_traveled_r;
     
     // Debug a cada 100ms
     #ifdef SERIAL_DEBUG
@@ -697,42 +713,47 @@ bool updateTurnWithEncoder() {
     #endif
     
     // verifica se atingiu o alvo
-    if (encoder_counts_traveled >= turnTargetEncoderCount) {
-        setMotorDifferential(0, 0);
+    if (encoder_counts_traveled_l >= turnTargetEncoderCount) {
+        pwm_l = 0;
+        setMotorDifferential(pwm_r, pwm_l);
+        stoped_l = true;
+    }
+    if (encoder_counts_traveled_r >= turnTargetEncoderCount) {
+        pwm_r = 0;
+        setMotorDifferential(pwm_r, pwm_l);
+        stoped_r = true;
+    }
+    if (stoped_r && stoped_l) {
         turnWithEncoderActive = false;
-        
-        #ifdef SERIAL_DEBUG
-        Serial.printf("Giro finalizado, Total de pulsos: %d\n", encoder_counts_traveled);
-        #endif
-        
+        mqtt_send_telemetry_kv_num("esp/debug", "trn_pulse_R", EncoderCount);
+        mqtt_send_telemetry_kv_num("esp/debug", "trn_pulse_L", EncoderCountL); 
         return false;
     }
-    
-    // reduz vel próximo ao alvo p evitar ultrapassar
-    if (encoder_counts_remaining <= 2) {
-        int pwm = 80;
-        if (turnDirectionEncoder > 0) {
-            setMotorDifferential(-pwm, pwm);
-        } else {
-            setMotorDifferential(pwm, -pwm);
-        }
-    }
+    // // reduz vel próximo ao alvo p evitar ultrapassar
+    // if (encoder_counts_remaining <= 2) {
+    //      pwm = 80;
+    //     if (turnDirectionEncoder > 0) {
+    //         setMotorDifferential(-pwm, pwm);
+    //     } else {
+    //         setMotorDifferential(pwm, -pwm);
+    //     }
+    // }
 
-    // timeout de 5 segundos
-    static unsigned long turnStartTimeEncoder = 0;
-    if (encoder_counts_traveled == 0 && turnStartTimeEncoder == 0) {
-        turnStartTimeEncoder = millis();
-    }
-    if (millis() - turnStartTimeEncoder > 5000) {
-        setMotorDifferential(0, 0);
-        turnWithEncoderActive = false;
-        turnStartTimeEncoder = 0;
-        Serial.println("TIMEOUT: Giro por encoder excedeu 5 segundos!");
-        return false;
-    }
-    if (encoder_counts_traveled > 0) {
-        turnStartTimeEncoder = 0; // reset timeout se já está girando
-    }
+    // // timeout de 5 segundos
+    // static unsigned long turnStartTimeEncoder = 0;
+    // if (encoder_counts_traveled == 0 && turnStartTimeEncoder == 0) {
+    //     turnStartTimeEncoder = millis();
+    // }
+    // if (millis() - turnStartTimeEncoder > 5000) {
+    //     setMotorDifferential(0, 0);  
+    //     turnWithEncoderActive = false;
+    //     turnStartTimeEncoder = 0;
+    //     Serial.println("TIMEOUT: Giro por encoder excedeu 5 segundos!");
+    //     return false;
+    // }
+    // if (encoder_counts_traveled > 0) {
+    //     turnStartTimeEncoder = 0; // reset timeout se já está girando
+    // }
     
     return true;
 }
@@ -749,8 +770,8 @@ void setMotorDifferential(int pwm_r, int pwm_l) {
         digitalWrite(AIN2_R, HIGH);
         ledcWrite(MOTOR_PWMA_CHANNEL, -pwm_r);
     } else {
-        digitalWrite(AIN1_R, LOW);
-        digitalWrite(AIN2_R, LOW);
+        digitalWrite(AIN1_R, HIGH);
+        digitalWrite(AIN2_R, HIGH);
         ledcWrite(MOTOR_PWMA_CHANNEL, 0);
     }
 
@@ -758,14 +779,14 @@ void setMotorDifferential(int pwm_r, int pwm_l) {
     if (pwm_l > 0) {
         digitalWrite(BIN2_L, LOW);
         digitalWrite(BIN1_L, HIGH);
-        ledcWrite(MOTOR_PWMB_CHANNEL, pwm_l);
+        ledcWrite(MOTOR_PWMB_CHANNEL, (pwm_l - SpeedPWMTurnCompensation));
     } else if (pwm_l < 0) {
         digitalWrite(BIN1_L, LOW);
         digitalWrite(BIN2_L, HIGH);
-        ledcWrite(MOTOR_PWMB_CHANNEL, -pwm_l);
+        ledcWrite(MOTOR_PWMB_CHANNEL, ((-pwm_l) - SpeedPWMTurnCompensation));
     } else {
-        digitalWrite(BIN1_L, LOW);
-        digitalWrite(BIN2_L, LOW);
+        digitalWrite(BIN1_L, HIGH);
+        digitalWrite(BIN2_L, HIGH);
         ledcWrite(MOTOR_PWMB_CHANNEL, 0);
     }
 }

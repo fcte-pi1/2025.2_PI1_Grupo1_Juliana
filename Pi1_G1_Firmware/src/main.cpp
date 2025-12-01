@@ -93,8 +93,7 @@ void setup() {
 
   // Servo
 
-  // ServoSetup(PWM_SERVO, 0); // Servo no pino 18, começa em 0°
-  // MovimentaServo(90, 5000); // Aqui estamos fazendo o servo girar 90° por 5 segundos
+  ServoSetup(PWM_SERVO, 0); // Servo no pino 18, começa em 0°
   // Serial.println("Servo inicializado!");
 
 
@@ -136,7 +135,11 @@ void loop() {
     if (!getFlagStop()) {
         highLevelState = WAIT_COMMANDS;  
         digitalWrite(STBY, LOW);
+        delay(100);
+        MovimentaServo(90, 5000); // Aqui estamos fazendo o servo girar 90° por 5 segundos
+#if defined(SERIAL_DEBUG)
         Serial.println("Troca para WAIT_COMMANDS");
+#endif
         break;
     }
     mqtt_loop();
@@ -244,6 +247,8 @@ void processLoop() {
     }
   } else if (currentCommandIndex < getNumeroComandos()) {
       // Se não está executando nada e há comandos na fila, executa o próximo
+      resetErrorsPID();
+      delay(100);
       executeNextCommand();
 #if defined(SERIAL_DEBUG)
       Serial.println("Chamando proximo comando.");
@@ -252,6 +257,7 @@ void processLoop() {
       // Não há mais comandos
       // Serial.println("Todos os comandos da fila foram executados.");
       clearCommandQueue();
+      resetErrorsPID();
       currentCommandIndex = 0;
       resetFlagStop();
   }
