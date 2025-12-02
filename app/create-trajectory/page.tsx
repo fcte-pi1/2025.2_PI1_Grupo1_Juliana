@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useState, useEffect, useMemo } from "react"
 import mqtt from "mqtt" // MODIFICADO: Importar MQTT
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -27,6 +27,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 type CommandType = "move" | "rotate" | "release"
 type SendStatus = "idle" | "sending" | "success" | "error"
+
+type RawPoint = {
+  x: number
+  y: number
+}
 
 interface Command {
   id: string
@@ -79,6 +84,15 @@ export default function CreateTrajectory() {
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle")
   const [storeInMemory, setStoreInMemory] = useState(false)
+
+  // Estados para trajetória em tempo real
+  const [points, setPoints] = useState<RawPoint[]>([])
+  const [lastX, setLastX] = useState<number | null>(null)
+  const [lastY, setLastY] = useState<number | null>(null)
+  const [isConnected, setIsConnected] = useState(false)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [totalDistance, setTotalDistance] = useState(0)
+  const [lastSegmentDistance, setLastSegmentDistance] = useState(0)
 
   const handleTemplateDragStart = (template: CommandTemplate) => {
     setDraggedTemplate(template)
@@ -180,6 +194,134 @@ export default function CreateTrajectory() {
     setTrajectoryName("");
     setCommands([]);
     setStoreInMemory(false);
+  };
+
+  const handleReset = () => {
+    setCommands([]);
+    setTrajectoryName("");
+    setSendStatus("idle");
+    setStoreInMemory(false);
+  };
+
+  // Polling para trajetória em tempo real
+  useEffect(() => {
+    let cancelled = false;
+
+    const poll = async () => {
+      if (cancelled) return;
+
+      try {
+        const res = await fetch("/api/telemetry");
+
+        if (res.status === 204) {
+          setIsConnected(true);
+        } else if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setConnectionError(
+            (data as { error?: string }).error ??
+              "Erro ao buscar telemetria no backend.",
+          );
+          setIsConnected(false);
+        } else {
+          const data = (await res.json()) as {
+            pos_x: number | null;
+            pos_y: number | null;
+          };
+
+          setIsConnected(true);
+          setConnectionError(null);
+
+          let nextX = lastX;
+          let nextY = lastY;
+
+          if (typeof data.pos_x === "number") {
+            nextX = data.pos_x;
+            setLastX(nextX);
+          }
+
+          if (typeof data.pos_y === "number") {
+            nextY = data.pos_y;
+            setLastY(nextY);
+          }
+
+          if (nextX != null && nextY != null) {
+            setPoints((prev) => {
+              const newPoint = { x: nextX as number, y: nextY as number };
+
+              if (prev.length > 0) {
+                const lastPoint = prev[prev.length - 1];
+                const dx = newPoint.x - lastPoint.x;
+                const dy = newPoint.y - lastPoint.y;
+                const segmentDistance = Math.sqrt(dx * dx + dy * dy);
+
+                setLastSegmentDistance(segmentDistance);
+                setTotalDistance((current) => current + segmentDistance);
+              }
+
+              return [...prev, newPoint];
+            });
+          }
+        }
+      } catch (err) {
+        console.error("[CreateTrajectory] Erro ao buscar telemetria:", err);
+        setConnectionError("Erro de comunicação com o backend.");
+        setIsConnected(false);
+      } finally {
+        if (!cancelled) {
+          setTimeout(poll, 500);
+        }
+      }
+    };
+
+    poll();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [lastX, lastY]);
+
+  // Normaliza os pontos para caberem num SVG 400x400 com padding generoso
+  const scaledPoints = useMemo(() => {
+    if (points.length === 0) return [];
+
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
+
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    // Padding maior para evitar que os desenhos fiquem nas bordas
+    const padding = 50;
+    const width = 400 - padding * 2;
+    const height = 400 - padding * 2;
+
+    const dx = maxX - minX || 1;
+    const dy = maxY - minY || 1;
+
+    return points.map((p) => {
+      const nx = (p.x - minX) / dx;
+      const ny = (p.y - minY) / dy;
+
+      const sx = padding + nx * width;
+      const sy = padding + (1 - ny) * height;
+
+      return { x: sx, y: sy };
+    });
+  }, [points]);
+
+  const polylinePoints = useMemo(
+    () => scaledPoints.map((p) => `${p.x},${p.y}`).join(" "),
+    [scaledPoints]
+  );
+
+  const handleResetTrajectory = () => {
+    setPoints([]);
+    setLastX(null);
+    setLastY(null);
+    setTotalDistance(0);
+    setLastSegmentDistance(0);
   };
 
   return (
@@ -366,27 +508,216 @@ export default function CreateTrajectory() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {sendStatus === "idle" && (
-                    <Button onClick={handleSend} size="lg" className="w-full">
-                      <Send className="mr-2 h-5 w-5" />
-                      Enviar via MQTT
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button onClick={handleSend} size="lg" className="flex-1">
+                        <Send className="mr-2 h-5 w-5" />
+                        Enviar via MQTT
+                      </Button>
+                      <Button onClick={handleReset} variant="outline" size="lg" className="flex-1">
+                        <RotateCcw className="mr-2 h-5 w-5" />
+                        Resetar
+                      </Button>
+                    </div>
                   )}
-                  {sendStatus === "sending" && <p className="text-center text-muted-foreground">Enviando...</p>}
+                  {sendStatus === "sending" && (
+                    <p className="text-center text-muted-foreground">Enviando...</p>
+                  )}
                   {sendStatus === "success" && (
-                    <div className="text-center text-green-600 font-bold">
-                       Sucesso! Pacote JSON enviado.
-                       <Button variant="link" onClick={resetStatus}>Novo envio</Button>
+                    <div className="space-y-2">
+                      <div className="text-center text-green-600 font-bold">
+                        Sucesso! Pacote JSON enviado.
+                      </div>
+                      <div className="flex gap-2">
+                        <Button onClick={handleSend} variant="outline" className="flex-1">
+                          <Send className="mr-2 h-4 w-4" />
+                          Enviar Novamente
+                        </Button>
+                        <Button onClick={handleReset} variant="outline" className="flex-1">
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          Resetar
+                        </Button>
+                      </div>
                     </div>
                   )}
                   {sendStatus === "error" && (
-                    <div className="text-center text-red-500 font-bold">
-                       Erro ao conectar ou enviar. Verifique o console.
-                       <Button variant="link" onClick={resetStatus}>Tentar novamente</Button>
+                    <div className="space-y-2">
+                      <div className="text-center text-red-500 font-bold">
+                        Erro ao conectar ou enviar. Verifique o console.
+                      </div>
+                      <div className="flex gap-2">
+                        <Button onClick={handleSend} variant="outline" className="flex-1">
+                          <Send className="mr-2 h-4 w-4" />
+                          Tentar Novamente
+                        </Button>
+                        <Button onClick={handleReset} variant="outline" className="flex-1">
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          Resetar
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </CardContent>
               </Card>
             )}
+
+            {/* Trajetória em tempo real */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Trajetória do Carrinho</CardTitle>
+                    <CardDescription>Visualização em tempo real da rota percorrida</CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={handleResetTrajectory}>
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    Resetar
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex justify-center">
+                  <svg
+                    viewBox="0 0 400 400"
+                    className="w-full max-w-md aspect-square border rounded-md bg-background"
+                  >
+                    {/* Grade simples */}
+                    <defs>
+                      <pattern
+                        id="grid-trajectory"
+                        width="20"
+                        height="20"
+                        patternUnits="userSpaceOnUse"
+                      >
+                        <path
+                          d="M 20 0 L 0 0 0 20"
+                          fill="none"
+                          stroke="#e5e5e5"
+                          strokeWidth="0.5"
+                        />
+                      </pattern>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#grid-trajectory)" />
+
+                    {/* Pista - borda externa escura */}
+                    {polylinePoints && (
+                      <polyline
+                        points={polylinePoints}
+                        fill="none"
+                        stroke="#374151"
+                        strokeWidth={14}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
+                    
+                    {/* Pista - base cinza */}
+                    {polylinePoints && (
+                      <polyline
+                        points={polylinePoints}
+                        fill="none"
+                        stroke="#9ca3af"
+                        strokeWidth={10}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
+                    
+                    {/* Linha tracejada amarela no meio da pista */}
+                    {polylinePoints && (
+                      <polyline
+                        points={polylinePoints}
+                        fill="none"
+                        stroke="#fbbf24"
+                        strokeWidth={2}
+                        strokeDasharray="8 4"
+                        strokeLinecap="round"
+                      />
+                    )}
+
+                    {scaledPoints.map((p, idx) => (
+                      <circle
+                        key={idx}
+                        cx={p.x}
+                        cy={p.y}
+                        r={2}
+                        fill="#1d4ed8"
+                        opacity={idx === scaledPoints.length - 1 ? 1 : 0.7}
+                      />
+                    ))}
+
+                    {/* Relâmpago McQueen acompanhando a trajetória */}
+                    {scaledPoints.length > 0 && (() => {
+                      // Calcular direção do movimento para orientar o carro
+                      const lastIdx = scaledPoints.length - 1;
+                      const angle = lastIdx > 0 ? (() => {
+                        const prev = scaledPoints[lastIdx - 1];
+                        const curr = scaledPoints[lastIdx];
+                        return Math.atan2(curr.y - prev.y, curr.x - prev.x) * (180 / Math.PI);
+                      })() : 0;
+                      
+                      return (
+                        <g
+                          transform={`translate(${
+                            scaledPoints[lastIdx].x
+                          }, ${scaledPoints[lastIdx].y}) rotate(${angle})`}
+                        >
+                          {/* Corpo principal do carro - vermelho */}
+                          <rect x={-10} y={-5} width={20} height={10} rx={3} fill="#DC143C" stroke="#B91C1C" strokeWidth={1.5} />
+                          
+                          {/* Parte frontal mais estreita */}
+                          <rect x={8} y={-4} width={6} height={8} rx={2} fill="#DC143C" />
+                          
+                          {/* Janelas laterais - preto */}
+                          <rect x={-6} y={-4} width={8} height={3} rx={1} fill="#1a1a1a" opacity={0.7} />
+                          <rect x={-6} y={1} width={8} height={3} rx={1} fill="#1a1a1a" opacity={0.7} />
+                          
+                          {/* Número 95 centralizado */}
+                          <text
+                            x={0}
+                            y={3}
+                            textAnchor="middle"
+                            fontSize="10"
+                            fontWeight="bold"
+                            fill="#FFD700"
+                            stroke="#000"
+                            strokeWidth={0.5}
+                            fontFamily="Arial, sans-serif"
+                          >
+                            95
+                          </text>
+                          
+                          {/* Raios de luz frontal */}
+                          <rect x={12} y={-2} width={3} height={4} rx={1} fill="#FFD700" opacity={0.8} />
+                          
+                          {/* Rodas - 4 rodas visíveis de cima */}
+                          <circle cx={-6} cy={-6} r={3} fill="#1a1a1a" stroke="#000" strokeWidth={0.5} />
+                          <circle cx={-6} cy={-6} r={2} fill="#333" />
+                          <circle cx={-6} cy={-6} r={1} fill="#555" />
+                          
+                          <circle cx={6} cy={-6} r={3} fill="#1a1a1a" stroke="#000" strokeWidth={0.5} />
+                          <circle cx={6} cy={-6} r={2} fill="#333" />
+                          <circle cx={6} cy={-6} r={1} fill="#555" />
+                          
+                          <circle cx={-6} cy={6} r={3} fill="#1a1a1a" stroke="#000" strokeWidth={0.5} />
+                          <circle cx={-6} cy={6} r={2} fill="#333" />
+                          <circle cx={-6} cy={6} r={1} fill="#555" />
+                          
+                          <circle cx={6} cy={6} r={3} fill="#1a1a1a" stroke="#000" strokeWidth={0.5} />
+                          <circle cx={6} cy={6} r={2} fill="#333" />
+                          <circle cx={6} cy={6} r={1} fill="#555" />
+                        </g>
+                      );
+                    })()}
+                  </svg>
+                </div>
+                <div className="mt-4 text-sm text-muted-foreground">
+                  Distância total percorrida:{" "}
+                  <span className="font-mono text-foreground">
+                    {totalDistance.toFixed(0)} cm
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </div>
       </main>
