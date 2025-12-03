@@ -41,7 +41,6 @@
 /*
  * 20 slot Encoder generates 4 to 5 Hz at min speed and 110 Hz at max speed => 200 to 8 ms per period
  */
-#define ENCODER_COUNTS_PER_FULL_ROTATION    20
 #define ENCODER_SENSOR_RING_MILLIS          4
 #define ENCODER_SENSOR_TIMEOUT_MILLIS       400L // Timeout for encoder ticks if motor is running
 #define SPEED_TIMEOUT_MILLIS                1000 // After this timeout for encoder interrupts speed values are reset
@@ -49,8 +48,10 @@
 #define MAX_SPEED_PWM                        255L // Long constant, otherwise we get "integer overflow in expression"
 
 
-#define DEFAULT_CIRCUMFERENCE_MILLIMETER     213
-#define FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT  (8.4)//((DEFAULT_CIRCUMFERENCE_MILLIMETER) / ENCODER_COUNTS_PER_FULL_ROTATION) 
+const float ENCODER_COUNTS_PER_FULL_ROTATION  =  38.0;
+const float DEFAULT_CIRCUMFERENCE_MILLIMETER  =   213.0;
+const float FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT = (DEFAULT_CIRCUMFERENCE_MILLIMETER / ENCODER_COUNTS_PER_FULL_ROTATION); // = 10.65
+
 
 /*
  * The millis per tick have the unit [ms]/ (circumference[cm]/countsPerCircumference) -> ms/cm
@@ -58,7 +59,7 @@
  */
 #define SPEED_SCALE_VALUE ((100L * DEFAULT_CIRCUMFERENCE_MILLIMETER) / ENCODER_COUNTS_PER_FULL_ROTATION) // 1100
 
-#define ENCODER_COUNTS_PER_90_DEGREES        23  // Pulsos do encoder necessários para girar 90° (ajustável)
+#define ENCODER_COUNTS_PER_90_DEGREES        26  // Pulsos do encoder necessários para girar 90° (ajustável)
 
 
 // Corresponds to 2 volt. At 2 volt I measured around 32 cm/s. PWM=127 for 4 volt VCC, 68 for 7.4 volt VCC
@@ -104,8 +105,10 @@ void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int
         uint8_t aRequestedDirection);
 
 bool updateMotor();
-float getDistanceMillimeter();
+float getDistanceMillimeter(bool update);
 void resetErrorsPID();
+unsigned int getSpeed();
+void AtualizaPosicao (float dist);
 
 // Funções para giro por tempo (fallback)
 void startTurn(unsigned long duration_ms, int direction);

@@ -4,10 +4,31 @@
 #include <Wire.h>
 #include "parser.h"
 #include <mqtt.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <main.h>
 
 #define DIREITA false
 #define ESQUERDA true
 
+
+extern Adafruit_MPU6050 mpu;
+extern pos carrinho;
+extern int graphBehaviour;
+
+// ZUPT
+const int janelaZupt = 20;
+float janelaZ[janelaZupt];
+int idxZ = 0;
+int contadorEstavelZ = 0;
+const float limiteZ = 0.015;  // limite ideal para "robô parado"
+
+const float alfaZ = 0.1;     // Peso do filtro exponencial (quanto menor, mais suave)
+
+float gyroBiasZ = 0.0;       // Bias dinâmico (vai sendo recalibrado)
+float gyroEmaZ = 0.0;        // Filtro EMA
+bool emaInit = false;
+float previousDistance = 0.0;
 
 // Variáveis para giro por tempo (fallback)
 static bool turnActive = false;
@@ -55,17 +76,23 @@ bool directionCompensationFlag = ESQUERDA; // indica qual motor recebe a compens
 const int8_t rightCompensation = 0;
 const int8_t leftCompensation = 13;
 
-// --- Variáveis estáticas do PID ---
-static float pidIntegral = 0;
-static float pidDerivative = 0;
-static int32_t pidLastError = 0;
-unsigned long lastPWMSyncMillis = 0;
-const float SAMPLE_MIN_DT = 0.001f; // evita dividir por zero
+// ===== Controle de direção (PID baseado no MPU6050) =====
+float yawAngle = 0.0f;        // anguloAtual do MPU
+float yawTarget = 0.0f;       // manter trajetória
+float yawLastError = 0.0f;
 
-// --- Ganhos do PID (ajuste depois) ---
-float Kp_sync = 5.2; 
-float Ki_sync = 0.9;  
-float Kd_sync = 0.00;   
+static float yawIntegral = 0.0f;
+static float yawDerivative = 0.0f;
+
+unsigned long lastYawPidMillis = 0;
+
+// Ganhos para PID com gyro/angulo
+float Kp_yaw = 4.0f;
+float Ki_yaw = 0.2;
+float Kd_yaw = 0.7f;
+
+// Limites
+const float YAW_INTEGRAL_MAX = 500;
 
 /*
     * Distance optocoupler impulse counter. It is reset at startGoDistanceCount if motor was stopped.
@@ -103,7 +130,6 @@ bool stoped_r = false;
 bool stoped_l = false;
 
 void resetSpeedValues(); 
-unsigned int getSpeed();
 unsigned int getBrakingDistanceMillimeter();
 // unsigned int getDistanceMillimeter() ;
 bool isStopped();
@@ -116,91 +142,144 @@ void setSpeedPWMAndDirection(uint8_t aRequestedSpeedPWM, uint8_t aRequestedDirec
 void setSpeedPWMAndDirectionWithRamp(uint8_t aRequestedSpeedPWM, uint8_t aRequestedDirection) ;
 void resetEncoderControlValues();
 void setMotorDifferential(int pwm_r, int pwm_l);
-int32_t updatePWMSynchronization();
+void atualizarAnguloMPU();
+int32_t updateYawSynchronization();
+// int32_t updatePWMSynchronization();
 
 
 //=======================================================================
-
+void AtualizaPosicao (float dist){
+  if(graphBehaviour == SOMA_X){
+    carrinho.x += (int)roundf(dist/10.0);
+  }else if (graphBehaviour == SUBTRAI_Y){
+    carrinho.y -= (int)roundf(dist/10.0);
+  }else if (graphBehaviour == SUBTRAI_X){
+    carrinho.x -= (int)roundf(dist/10.0);
+  }else if (graphBehaviour == SOMA_Y){
+    carrinho.y += (int)roundf(dist/10.0);
+  }
+}
 
 void IRAM_ATTR handleEncoderInterrupt() {
-    long tMillis = millis();
-    unsigned long tDeltaMillis = tMillis - LastEncoderInterruptMillis;
-    if (tDeltaMillis <= ENCODER_SENSOR_RING_MILLIS) {
-        // assume signal is ringing and do nothing
-    } else {
-        LastEncoderInterruptMillis = tMillis;
-        if (tDeltaMillis < ENCODER_SENSOR_TIMEOUT_MILLIS) {
-            EncoderInterruptDeltaMillis = tDeltaMillis;
-        } else {
-            // timeout
-            EncoderInterruptDeltaMillis = 0;
-        }
-
-        EncoderCount++;
-        EncoderCountForSynchronize++;
-        SensorValuesHaveChanged = true;
-    }
+    static uint32_t lastMicrosR = 0;
+    uint32_t now = micros();
+    if (now - lastMicrosR < 5000) return;   // ignore pulsos dentro de 500u
+    lastMicrosR = now;  
+    LastEncoderInterruptMillis = millis();
+    EncoderCount++;
+    EncoderCountForSynchronize++;
 }
 void IRAM_ATTR handleEncoderInterruptL() {
-    long tMillis = millis();
-    unsigned long tDeltaMillis = tMillis - LastEncoderInterruptMillisL;
-    if (tDeltaMillis <= ENCODER_SENSOR_RING_MILLIS) {
-        // assume signal is ringing and do nothing
-    } else {
-        LastEncoderInterruptMillisL = tMillis;
-        if (tDeltaMillis < ENCODER_SENSOR_TIMEOUT_MILLIS) {
-            EncoderInterruptDeltaMillisL = tDeltaMillis;
-        } else {
-            // timeout
-            EncoderInterruptDeltaMillisL = 0;
-        }
-
-        EncoderCountL++;
-        EncoderCountForSynchronizeL++;
-    }
+    static uint32_t lastMicrosL = 0;
+    uint32_t now = micros();
+    if (now - lastMicrosL < 5000) return;   // ignore pulsos dentro de 500u
+    lastMicrosL = now;  
+    EncoderCountL++;
+    EncoderCountForSynchronizeL++;
 }
 
 void resetErrorsPID() {
-    pidIntegral = 0;
-    pidLastError = 0;
-    pidDerivative = 0;
+    yawIntegral = 0;
+    yawLastError = 0;
+    yawDerivative = 0;
 }
 
-int32_t updatePWMSynchronization() {
-    unsigned long now = millis();
-    float dt = (now - lastPWMSyncMillis) / 1000.0f; // segundos
-    if (dt <= 0) return 0;
-    lastPWMSyncMillis = now;
-    // diferença entre as rodas
-    int32_t error = (int32_t)EncoderCount - (int32_t)EncoderCountL;
-    int32_t absError = error;
-     
-    if(error >= 0) {
-        directionCompensationFlag = DIREITA; // roda direita mais rapida
-    } else if (error < 0) {
-        directionCompensationFlag = ESQUERDA; // roda esquerda mais rapida
-        absError = -error; // valor absoluto
+void atualizarAnguloMPU() {
+
+    static unsigned long ultimoTempo = millis();
+    unsigned long agora = millis();
+    float dt = (agora - ultimoTempo) / 1000.0;
+    ultimoTempo = agora;
+
+    sensors_event_t a, g, temp;
+
+    mpu.getEvent(&a, &g, &temp);
+
+    float gyroZ = g.gyro.z - gyroBiasZ;
+
+    if (!emaInit) {
+        gyroEmaZ = gyroZ;
+        emaInit = true;
+    } else {
+        gyroEmaZ = alfaZ * gyroZ + (1 - alfaZ) * gyroEmaZ;
     }
 
-    // ===== PID =====
-    // Proporcional
+    yawAngle += gyroEmaZ * dt * 180.0 / PI;
 
-    // Integral
-    pidIntegral += error * dt;
-    if (pidIntegral > 600) pidIntegral = 600;
-    if (pidIntegral < -600) pidIntegral = -600;
+    if (yawAngle > 180) yawAngle -= 360;
+    if (yawAngle < -180) yawAngle += 360;
 
-    // Derivada
-    pidDerivative = (error - pidLastError) / dt;
-    pidLastError = error;
+    // ZUPT
+    janelaZ[idxZ] = gyroEmaZ;
+    idxZ = (idxZ + 1) % janelaZupt;
 
-    // Correção final
-    float pidOutput = (Kp_sync * error) + (Ki_sync * pidIntegral) + (Kd_sync * pidDerivative);
-    // controle proporcional
-    SpeedPWMCompensation = (int32_t)fabs(pidOutput);
+    float soma = 0;
+    for (int i = 0; i < janelaZupt; i++) soma += fabs(janelaZ[i]);
+    float mediaZ = soma / janelaZupt;
 
-    // limitar correção
-    if (SpeedPWMCompensation > PWM_CORRECTION_MAX) SpeedPWMCompensation = PWM_CORRECTION_MAX;
+    if (mediaZ < limiteZ) {
+        contadorEstavelZ++;
+        if (contadorEstavelZ > 20) {
+            gyroBiasZ += gyroEmaZ * 0.05;
+            contadorEstavelZ = 0;
+        }
+    }
+}
+
+float angularError(float target, float current) {
+    float e = target - current;
+    while (e > 180) e -= 360;
+    while (e < -180) e += 360;
+    return e;
+}
+
+int32_t updateYawSynchronization() {
+    atualizarAnguloMPU();
+
+    unsigned long now = millis();
+    float dt = (now - lastYawPidMillis) / 1000.0f;
+    if (dt <= 0) return 0;
+    lastYawPidMillis = now;
+
+    // erro: diferença entre angulo atual e angulo alvo
+    float error = angularError(yawTarget, yawAngle);
+    float absError = fabs(error);
+
+    // direção da correção
+    if (error > 0) {
+        directionCompensationFlag = ESQUERDA;
+    } else if (error < 0) {
+        directionCompensationFlag = DIREITA; // puxa para esquerda → reduz esquerda
+    } else {
+        directionCompensationFlag = 0;
+    }
+
+    // ====== PID ======
+    float P = Kp_yaw * error;
+
+    yawIntegral += error * dt;
+    if (yawIntegral > YAW_INTEGRAL_MAX) yawIntegral = YAW_INTEGRAL_MAX;
+    if (yawIntegral < -YAW_INTEGRAL_MAX) yawIntegral = -YAW_INTEGRAL_MAX;
+
+    float I = Ki_yaw * yawIntegral;
+
+    yawDerivative = (error - yawLastError) / dt;
+    yawLastError = error;
+
+    float D = Kd_yaw * yawDerivative;
+
+    float pidOut = P + I + D;
+
+    SpeedPWMCompensation = (int32_t)fabs(pidOut);
+    if (SpeedPWMCompensation > PWM_CORRECTION_MAX)
+        SpeedPWMCompensation = PWM_CORRECTION_MAX;
+
+    // // debug
+    // mqtt_send_telemetry_kv_num("esp/debug", "yaw", yawAngle);
+    // mqtt_send_telemetry_kv_num("esp/debug", "yawError", error);
+    // mqtt_send_telemetry_kv_num("esp/debug", "yawPID", pidOut);
+    // mqtt_send_telemetry_kv_num("esp/debug", "yawIntegral", yawIntegral);
+
     return absError;
 }
 
@@ -238,6 +317,8 @@ void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int
         stop(DefaultStopMode); // In case motor was running
         return;
     }
+    atualizarAnguloMPU();
+    yawTarget = yawAngle;
     resetEncoderControlValues();
     if (RequestedSpeedPWM == 0) {
         TargetDistanceMillimeter = aRequestedDistanceMillimeter;
@@ -246,7 +327,7 @@ void startGoDistanceMillimeterWithSpeed(uint8_t aRequestedSpeedPWM, unsigned int
         /*
          * Already moving
          */
-        TargetDistanceMillimeter = getDistanceMillimeter() + aRequestedDistanceMillimeter;
+        TargetDistanceMillimeter = getDistanceMillimeter(true) + aRequestedDistanceMillimeter;
         setSpeedPWMAndDirection(aRequestedSpeedPWM, aRequestedDirection);
     }
     LastTargetDistanceMillimeter = TargetDistanceMillimeter;
@@ -257,6 +338,7 @@ void resetEncoderControlValues() {
   EncoderCount = 0;
   EncoderCountL = 0;
   EncoderCountForSynchronize = 0;
+  previousDistance = 0.0;
   LastEncoderInterruptMillis = millis() - ENCODER_SENSOR_RING_MILLIS - 1; // Set to a sensible value to avoid initial timeout
 }
 
@@ -360,11 +442,11 @@ void setSpeedPWM(uint8_t aRequestedSpeedPWM) {
     // Serial.printf("PWM esquerda: %d\n", leftPwm);
 #endif
 
-    mqtt_send_telemetry_kv_num("esp/debug", "integral", pidIntegral); 
-    mqtt_send_telemetry_kv_num("esp/debug", "derivative", pidDerivative); 
-    mqtt_send_telemetry_kv_num("esp/debug", "error", int(EncoderCount - EncoderCountL)); 
-    mqtt_send_telemetry_kv_num("esp/debug", "rightPwm", rightPwm); 
-    mqtt_send_telemetry_kv_num("esp/debug", "leftPwm", leftPwm); 
+    // mqtt_send_telemetry_kv_num("esp/debug", "integral", yawIntegral); 
+    // mqtt_send_telemetry_kv_num("esp/debug", "derivative", yawDerivative); 
+    // mqtt_send_telemetry_kv_num("esp/debug", "error", angularError(yawTarget, yawAngle)); 
+    // mqtt_send_telemetry_kv_num("esp/debug", "rightPwm", rightPwm); 
+    // mqtt_send_telemetry_kv_num("esp/debug", "leftPwm", leftPwm); 
 
     ledcWrite(MOTOR_PWMA_CHANNEL, rightPwm);
     ledcWrite(MOTOR_PWMB_CHANNEL, leftPwm);
@@ -446,14 +528,14 @@ bool updateMotor() {
   unsigned long tMillis = millis();
   uint8_t tNewSpeedPWM = RequestedSpeedPWM;
 
-  int32_t error = updatePWMSynchronization();
+  int32_t error = updateYawSynchronization();
 
   /*
   * Check if target distance is reached or encoder tick has timeout
   */
   if (tNewSpeedPWM > 0) {
     if (CheckStopConditionInUpdateMotor
-            && (getDistanceMillimeter() >= TargetDistanceMillimeter
+            && (getDistanceMillimeter(true) >= TargetDistanceMillimeter
                     || tMillis > (LastEncoderInterruptMillis + ENCODER_SENSOR_TIMEOUT_MILLIS))) {
       /*
       * Stop now
@@ -461,7 +543,7 @@ bool updateMotor() {
       stop(STOP_MODE_BRAKE); // this sets MOTOR_STATE_STOPPED;
         mqtt_send_telemetry_kv_num("esp/debug", "pulse_R", EncoderCount);
         mqtt_send_telemetry_kv_num("esp/debug", "pulse_L", EncoderCountL);  
-        mqtt_send_telemetry_kv_num("esp/debug", "distancia_mm", getDistanceMillimeter());  
+        // mqtt_send_telemetry_kv_num("esp/debug", "distancia_mm", getDistanceMillimeter(false));  
 #if defined(SERIAL_DEBUG)      
         Serial.printf("Brake at: %f, %d/%d pulses\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT), EncoderCountL, EncoderCount);
 #endif
@@ -499,7 +581,7 @@ bool updateMotor() {
       */
       if (tNewSpeedPWM == RequestedDriveSpeedPWM
               || (CheckStopConditionInUpdateMotor
-                      && getDistanceMillimeter() + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
+                      && getDistanceMillimeter(true) + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
         //  RequestedDriveSpeedPWM reached switch to --> DRIVE_SPEED_PWM and check immediately for next transition to RAMP_DOWN
 #if defined(SERIAL_DEBUG)        
         Serial.printf("Drive started at: %f\n", (EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT));
@@ -521,7 +603,7 @@ bool updateMotor() {
       /*
         * Wait until target distance - braking distance reached
         */
-        if (CheckStopConditionInUpdateMotor && (getDistanceMillimeter() + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
+        if (CheckStopConditionInUpdateMotor && (getDistanceMillimeter(true) + getBrakingDistanceMillimeter() >= TargetDistanceMillimeter)) {
           if (RequestedSpeedPWM > RAMP_DOWN_VALUE_OFFSET_SPEED_PWM) {
               tNewSpeedPWM -= (RAMP_DOWN_VALUE_OFFSET_SPEED_PWM - RAMP_DOWN_VALUE_DELTA); // RAMP_VALUE_DELTA is immediately subtracted below
           } else {
@@ -578,8 +660,14 @@ bool updateMotor() {
   return (RequestedSpeedPWM > 0); // current speed == 0
 }
 
-float getDistanceMillimeter() {
-    return EncoderCount * FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT; // * 11
+float getDistanceMillimeter(bool update) {
+    float distance = ((EncoderCount + EncoderCountL) / 2)* FACTOR_COUNT_TO_MILLIMETER_INTEGER_DEFAULT;
+    if(update){
+        AtualizaPosicao((distance - previousDistance));
+        previousDistance = distance;
+    }
+    mqtt_send_pos("telemetry", "pos_x", "pos_y", carrinho.x, carrinho.y);
+    return distance; // * 11
 }
 
 /*
@@ -621,41 +709,91 @@ void resetSpeedValues() {
 
 
 
-// Função para giro por tempo
-void startTurn(unsigned long duration_ms, int direction) {
-    turnDuration = duration_ms;
-    turnActive = true;
-    turnStartTime = millis();
+// ===== GIRAR USANDO O PID E A MPU =====
 
-    int pwm = 150; // Velocidade de giro (PWM)
+void startTurn(int degrees) {
+    if (degrees == 0) return;
 
-    if (direction > 0) {
-        setMotorDifferential(-pwm, pwm); // Direita
+    atualizarAnguloMPU(); // garante yawAngle atualizado
+
+    // define alvo absoluto e normaliza para -180..180
+    yawTarget = yawAngle + (float)degrees;
+    if (yawTarget > 180.0f) yawTarget -= 360.0f;
+    if (yawTarget <= -180.0f) yawTarget += 360.0f;
+
+    // reset do PID de yaw para evitar "herança" de erro
+    yawIntegral = 0.0f;
+    yawLastError = 0.0f; // evita derivadas enormes no primeiro passo
+
+    int pwm = 100; // ajuste conforme necessário
+
+    // calcula erro menor caminho e decide sentido
+    float err = angularError(yawTarget, yawAngle); // target - current normalizado
+    if (err > 0.0f) {
+        // err positivo = faltam graus POSITIVOS -> girar para esquerda (CCW)
+        setMotorDifferential(pwm, -pwm);
     } else {
-        setMotorDifferential(pwm, -pwm); // Esquerda
+        // err negativo -> girar para direita (CW)
+        setMotorDifferential(-pwm, pwm);
     }
+
+    turnActive = true;
 }
 
 bool updateTurn() {
-    // Prioriza giro por encoder se estiver ativo
-    if (turnWithEncoderActive) {
-        return updateTurnWithEncoder();
-    }
-    
-    // Fallback: giro por tempo
-    if (!turnActive) {
+    if (!turnActive) return false;
+
+    atualizarAnguloMPU();
+
+    // erro pelo menor caminho (target - current)
+    float err = angularError(yawTarget, yawAngle);
+    float absErr = fabs(err);
+
+    const float TURN_THRESHOLD_DEG = 0.5f; // ajuste fino: 1..3 graus
+
+    // se dentro do limiar, parar e marcar fim do giro
+    if (absErr <= TURN_THRESHOLD_DEG) {
+        setMotorDifferential(0, 0);
+        turnActive = false;
+
+        // limpar integrador / derivador para não estragar próximo comando
+        yawIntegral = 0.0f;
+        yawLastError = 0.0f;
         return false;
     }
 
-    if (millis() - turnStartTime >= turnDuration) {
-        setMotorDifferential(0, 0);
-        turnActive = false;
-        Serial.println("Giro por tempo finalizado.");
-        return false;
+    // Opcional: controle PID para o giro (substitui velocidade fixa)
+    // Exemplo simples: usa pidOut para reduzir pwm conforme aproxima
+    float dt = (millis() - lastYawPidMillis) / 1000.0f;
+    if (dt <= 0) dt = 0.01f;
+    lastYawPidMillis = millis();
+
+    float P = Kp_yaw * err;
+    yawIntegral += err * dt;
+    // anti-windup
+    if (yawIntegral > YAW_INTEGRAL_MAX) yawIntegral = YAW_INTEGRAL_MAX;
+    if (yawIntegral < -YAW_INTEGRAL_MAX) yawIntegral = -YAW_INTEGRAL_MAX;
+    float I = Ki_yaw * yawIntegral;
+    float D = Kd_yaw * ((err - yawLastError) / dt);
+    yawLastError = err;
+    float pidOut = P + I + D;
+
+    // pidOut pode ser grande; limite-o a uma faixa de pwm desejada
+    float pwmMaxTurn = 130.0f; // ajuste: valor máximo de PWM para giro
+    float pwmCmd = fabs(pidOut);
+    if (pwmCmd > pwmMaxTurn) pwmCmd = pwmMaxTurn;
+    if (pwmCmd < 90.0f) pwmCmd = 90.0f; // evita perder torque (deadzone)
+
+    // escolhe direção com base no sinal do erro (err > 0 -> left)
+    if (err > 0.0f) {
+        setMotorDifferential((int)pwmCmd, -(int)pwmCmd); // left turn
+    } else {
+        setMotorDifferential(-(int)pwmCmd, (int)pwmCmd); // right turn
     }
 
     return true;
 }
+
 
 // Função para giro por encoder
 void startTurnWithEncoder(int degrees) {
@@ -725,8 +863,8 @@ bool updateTurnWithEncoder() {
     }
     if (stoped_r && stoped_l) {
         turnWithEncoderActive = false;
-        mqtt_send_telemetry_kv_num("esp/debug", "trn_pulse_R", EncoderCount);
-        mqtt_send_telemetry_kv_num("esp/debug", "trn_pulse_L", EncoderCountL); 
+        // mqtt_send_telemetry_kv_num("esp/debug", "trn_pulse_R", EncoderCount);
+        // mqtt_send_telemetry_kv_num("esp/debug", "trn_pulse_L", EncoderCountL); 
         return false;
     }
     // // reduz vel próximo ao alvo p evitar ultrapassar
@@ -817,7 +955,8 @@ void turnDegrees(int degrees) {
         return;
     }
     
-    startTurnWithEncoder(degrees);
+    // startTurnWithEncoder(degrees);
+    startTurn(degrees);
     Serial.printf("Iniciando giro,: %d graus para %s\n", 
                   abs(degrees), (degrees > 0) ? "DIREITA" : "ESQUERDA");
     
