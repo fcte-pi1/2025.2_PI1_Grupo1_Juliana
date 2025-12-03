@@ -7,6 +7,8 @@
 #include "Motor_Control.h"
 #include <main.h>
 #include "parser.h"
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
 
 // Constantes de calibração
 // Tempo em milissegundos para girar 90 graus.
@@ -35,6 +37,16 @@ unsigned long ultimaMedicao;
 volatile bool inaUpdateFlag = false;
 int flag = 0;
 
+
+struct pos carrinho{
+  .x = X_INIT,
+  .y = Y_INIT
+};
+
+int graphBehaviour = SOMA_X; 
+
+Adafruit_MPU6050 mpu;
+
 void IRAM_ATTR InaTmrISR(){
   inaUpdateFlag = true;
 }
@@ -58,6 +70,8 @@ static void wifi_connect(const char* ssid, const char* pass, int channel) {
 }
 
 
+
+
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -76,7 +90,7 @@ void setup() {
   //Timer Setup
   inaTmr = timerBegin(0,80,true);
   timerAttachInterrupt(inaTmr, &InaTmrISR, true);
-  timerAlarmWrite(inaTmr, 5000000, true);
+  timerAlarmWrite(inaTmr, 3000000, true);
   digitalWrite(STBY, LOW);
 
   if (!ina219.iniciar()) {
@@ -85,6 +99,11 @@ void setup() {
 #endif
     while (1) delay(10);
   }
+
+  if (!mpu.begin()) {
+
+  }
+
 
   EnergiaTotal = V_nominal * Capacidade_Ah * 3600.0;
   ultimaMedicao = millis();
@@ -133,7 +152,7 @@ void loop() {
     break;
   case EXECUTE_COMMAND:
     if (!getFlagStop()) {
-        highLevelState = WAIT_COMMANDS;  
+        highLevelState = WAIT_COMMANDS; 
         digitalWrite(STBY, LOW);
         delay(100);
         MovimentaServo(90, 5000); // Aqui estamos fazendo o servo girar 90° por 5 segundos
@@ -171,14 +190,17 @@ void loop() {
       int t_h = total_segundos / 3600;
       int t_min = (total_segundos % 3600) / 60;
       float t_seg = t_restante - (t_h *3600) - (t_min * 60);
-      mqtt_send_telemetry_kv_num("esp/telemetry", "tensao", tensao);
-      mqtt_send_telemetry_kv_num("esp/telemetry", "corrente", corrente);
-      mqtt_send_telemetry_kv_num("esp/telemetry", "energia_restante_Wh", (EnergiaRestante/3600));
-      mqtt_send_telemetry_kv_num("esp/telemetry", "distancia_mm", getDistanceMillimeter());
+      mqtt_send_telemetry_kv_num("telemetry", "tensao", tensao);
+      mqtt_send_telemetry_kv_num("telemetry", "corrente", corrente);
+      mqtt_send_telemetry_kv_num("telemetry", "energia_restante_Wh", (EnergiaRestante/3600));
+      mqtt_send_telemetry_kv_num("telemetry", "distancia_mm", getDistanceMillimeter(false));
       char  cmd_atual = getCommandCode(currentCommandIndex);
-      if(cmd_atual == 0) cmd_atual = '-';
-      mqtt_send_telemetry_kv("esp/telemetry", "comando_atual_tipo", String(cmd_atual).c_str());
-      mqtt_send_telemetry_kv_num("esp/telemetry", "numero_comando", currentCommandIndex);
+      if (cmd_atual == 'F'){
+        mqtt_send_telemetry_kv_num("telemetry", "velocidade_cm/s", getSpeed());
+      }else if(cmd_atual == 0) cmd_atual = '-';
+      mqtt_send_telemetry_kv("telemetry", "comando_atual_tipo", String(cmd_atual).c_str());
+      mqtt_send_telemetry_kv_num("telemetry", "numero_comando", currentCommandIndex);
+      mqtt_send_pos("telemetry", "pos_x", "pos_y", carrinho.x, carrinho.y);
 
 #if defined(SERIAL_DEBUG)
       Serial.printf("Tensão: %.3f V | Corrente: %.3f mA | Tempo restante: %d h %d min %.3f s (%.2f s)\n",
@@ -186,33 +208,6 @@ void loop() {
 #endif
   }
 }
-
-// void handleSerialInput() {
-//   if (Serial.available() > 0) {
-//     String input = Serial.readStringUntil('\n');
-//     input.trim();
-//     input.toUpperCase(); // Converter as cases de in para maiúsculas
-    
-//     // Limpa a fila de comandos antes de adicionar novos
-//     commandCount = 0;
-//     currentCommandIndex = 0;
-
-//     // cada caractere como um comando
-//     for (int i = 0; i < input.length() && commandCount < 10; i++) {
-//         char c = input.charAt(i);
-//         // ignora espaços e vírgulas
-//         if (c != ' ' && c != ',') {
-//             // aceita apenas F, T, D, E
-//             if (c == 'F' || c == 'T' || c == 'D' || c == 'E') {
-//                 commandQueue[commandCount++] = c;
-//             }
-//         }
-//     }
-
-//     Serial.printf("%d comandos recebidos e enfileirados.\n", commandCount);
-//   }
-  
-// }
 
 
 void processLoop() {
@@ -222,9 +217,10 @@ void processLoop() {
     if (cmd == 'F'){
       if (!updateMotor()) {
         executingCommand = false; // Comando terminou
-        mqtt_send_telemetry_kv("esp/telemetry", "comando_atual_tipo", String(cmd).c_str());
-        mqtt_send_telemetry_kv_num("esp/telemetry", "numero_comando", currentCommandIndex);
-        mqtt_send_telemetry_kv_num("esp/telemetry", "distancia_mm", getDistanceMillimeter());
+        mqtt_send_telemetry_kv("telemetry", "comando_atual_tipo", String(cmd).c_str());
+        mqtt_send_pos("telemetry", "pos_x", "pos_y", carrinho.x, carrinho.y);
+        mqtt_send_telemetry_kv_num("telemetry", "numero_comando", currentCommandIndex);
+        mqtt_send_telemetry_kv_num("telemetry", "distancia_mm", getDistanceMillimeter(false));
 #if defined(SERIAL_DEBUG)
         Serial.println("Comando finalizado.");
 #endif
@@ -235,9 +231,9 @@ void processLoop() {
     else if (cmd == 'D' || cmd == 'E'){
       if (!updateTurn()) {
         executingCommand = false; // Comando terminou
-        mqtt_send_telemetry_kv("esp/telemetry", "comando_atual_tipo", String(cmd).c_str());
-        mqtt_send_telemetry_kv_num("esp/telemetry", "numero_comando", currentCommandIndex);
-        mqtt_send_telemetry_kv_num("esp/telemetry", "distancia_mm", getDistanceMillimeter());
+        mqtt_send_telemetry_kv("telemetry", "comando_atual_tipo", String(cmd).c_str());
+        mqtt_send_telemetry_kv_num("telemetry", "numero_comando", currentCommandIndex);
+        mqtt_send_telemetry_kv_num("telemetry", "distancia_mm", getDistanceMillimeter(false));
 #if defined(SERIAL_DEBUG)
         Serial.println("Comando finalizado.");
 #endif
@@ -279,11 +275,19 @@ void executeNextCommand() {
         executingCommand = true;
     } 
     else if (command == 'D') {
-        turnDegrees(90);
+        graphBehaviour++;
+        if(graphBehaviour > 3){
+          graphBehaviour = SOMA_X;
+        }
+        turnDegrees(-88);
         executingCommand = true;
     } 
     else if (command == 'E') {
-        turnDegrees(-90);
+        graphBehaviour--;
+        if(graphBehaviour < 0){
+          graphBehaviour = SOMA_Y;
+        }
+        turnDegrees(88);
         executingCommand = true;
     } 
     else {
