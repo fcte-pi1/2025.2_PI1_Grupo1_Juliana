@@ -119,6 +119,21 @@ bool mqtt_send_telemetry_kv(const char* topic, const char* key, const char* valu
   return publish_impl(topic, json.c_str());
 }
 
+bool mqtt_send_pos(const char* topic, const char* key1,const char* key2, int value_x, int value_y) {
+  String json; json.reserve(32 + strlen(key1) + strlen(key2) + 32);
+  json += "{\"";
+  json += key1;
+  json += "\":";
+  json += String(value_x);
+  json += ",";
+  json += " \"";
+  json += key2;
+  json += "\":";
+  json += String(value_y);
+  json += "}";
+  return publish_impl(topic, json.c_str());
+}
+
 
 
 

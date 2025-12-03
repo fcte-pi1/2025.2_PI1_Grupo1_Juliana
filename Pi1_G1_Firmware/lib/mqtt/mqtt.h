@@ -13,6 +13,8 @@ bool mqtt_send_telemetry(const char* topic, const char* jsonPayload);
 
 bool mqtt_send_telemetry_kv(const char* topic, const char* key, const char* value);
 
+bool mqtt_send_pos(const char* topic, const char* key1,const char* key2, int value_x, int value_y);
+
 template <typename T>
 bool mqtt_send_telemetry_kv_num(const char* topic, const char* key, T value) {
   if (!topic || !key) return false;
